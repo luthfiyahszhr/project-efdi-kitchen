@@ -1,2 +1,2 @@
 # project-efdi-kitchen
-OPTIMALISASI PENGELOLAAN PESANAN DAN KEBUTUHAN PRODUKSI PADA BISNIS CATERING BERBASIS WEB
+Optimalisasi Pengelolaan Pesanan dan Kebutuhan Produksi pada Bisnis Catering Berbasis Web
