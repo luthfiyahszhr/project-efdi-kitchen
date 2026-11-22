@@ -24,3 +24,9 @@ Jalankan file `.sql` di folder ini secara berurutan melalui **SQL Server Managem
 2. `01-create-database-and-user.sql` — Membuat database `EfdiKitchenDB` beserta *login/user* aplikasi.
 3. `02-schema.sql` — Membuat seluruh struktur 12 tabel, *primary key*, *foreign key*, dan *constraint* pada `EfdiKitchenDB`.
 4. `03-seed.sql` — Mengisi data awal (*seed*) serta migrasi 85 transaksi historis ke dalam tabel.
+5. `04-api-session.sql` — Membuat penyimpanan sesi SQL-backed yang dipakai autentikasi API.
+6. `05-tsd-schema-adjustments.sql` — Mengizinkan `batas_minimum` inventaris bernilai `NULL`, sesuai kontrak TSD.
+
+Jalankan migrasi 04 dan 05 dengan akun database yang memiliki izin perubahan skema (bukan akun runtime aplikasi). Kedua migrasi harus selesai sebelum menjalankan versi backend yang memakai sesi SQL dan batas stok nullable.
+
+Backend juga memerlukan `GOOGLE_RECAPTCHA_SECRET` di file `.env` untuk mengaktifkan registrasi. Gunakan secret Google reCAPTCHA milik aplikasi; jangan commit file `.env`.
