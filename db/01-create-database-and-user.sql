@@ -12,7 +12,7 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'efdi_app_login')
 BEGIN
     CREATE LOGIN [efdi_app_login]
-    WITH PASSWORD = N'EfdiKitchen_App2026!',
+    WITH PASSWORD = N'GANTI_DENGAN_PASSWORD_LOKAL',
          DEFAULT_DATABASE = [EfdiKitchenDB],
          CHECK_EXPIRATION = OFF,
          CHECK_POLICY = ON;
