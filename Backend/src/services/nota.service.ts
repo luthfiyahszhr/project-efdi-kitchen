@@ -9,10 +9,10 @@ import { nowWIB } from '../utils/datetime';
 export async function terbitkanNomorNota(trx: sql.Transaction): Promise<string> {
   const tanggal = nowWIB().format('YYYYMMDD');
   const r = await new sql.Request(trx)
-    .input('pola', sql.VarChar(40), `NOTA-${tanggal}-[0-9][0-9][0-9][0-9]`)
+    .input('pola', sql.NVarChar(40), `NOTA-${tanggal}-[0-9][0-9][0-9][0-9]`)
     .query(`
       SELECT ISNULL(MAX(CAST(RIGHT(nomor_nota, 4) AS INT)), 0) AS terakhir
-      FROM dbo.NotaDigital WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.nota_digital WITH (UPDLOCK, HOLDLOCK)
       WHERE nomor_nota LIKE @pola
     `);
   const seq = Number(r.recordset[0].terakhir) + 1;
@@ -28,13 +28,13 @@ export async function simpanNota(params: {
   nomorNota: string;
 }): Promise<void> {
   await new sql.Request(params.trx)
-    .input('nomor', sql.VarChar(18), params.nomorNota)
+    .input('nomor', sql.NVarChar(20), params.nomorNota)
     .input('idPesanan', sql.Int, params.idPesanan)
-    .input('total', sql.Decimal(14, 2), params.total)
-    .input('dp', sql.Decimal(14, 2), params.nominalDp)
-    .input('sisa', sql.Decimal(14, 2), params.sisa)
+    .input('total', sql.Decimal(12, 2), params.total)
+    .input('dp', sql.Decimal(12, 2), params.nominalDp)
+    .input('sisa', sql.Decimal(12, 2), params.sisa)
     .query(`
-      INSERT INTO dbo.NotaDigital (nomor_nota, id_pesanan, total_tagihan, nominal_dp, sisa_pembayaran)
+      INSERT INTO dbo.nota_digital (nomor_nota, id_pesanan, total_tagihan, nominal_dp, sisa_pembayaran)
       VALUES (@nomor, @idPesanan, @total, @dp, @sisa)
     `);
 }

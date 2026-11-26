@@ -30,7 +30,7 @@ export async function cekStatus(): Promise<StatusOperasional> {
   const pool = await getPool();
   const now = nowWIB();
 
-  const cfg = await pool.request().query(`SELECT mode FROM dbo.PengaturanPemesanan WHERE id_pengaturan = 1`);
+  const cfg = await pool.request().query(`SELECT mode FROM dbo.pengaturan_pemesanan WHERE id = 1`);
   const mode: string | undefined = cfg.recordset[0]?.mode;
 
   if (!mode) {
@@ -50,7 +50,7 @@ export async function cekStatus(): Promise<StatusOperasional> {
 
   // OTOMATIS
   const jadwalRes = await pool.request().query(`
-    SELECT hari, jam_buka, jam_tutup FROM dbo.JadwalOperasional WHERE aktif = 1
+    SELECT hari, jam_buka, jam_tutup FROM dbo.jadwal_operasional WHERE aktif = 1
   `);
   if (jadwalRes.recordset.length === 0) {
     try {

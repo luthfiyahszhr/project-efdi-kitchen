@@ -2,11 +2,8 @@ import * as sql from 'mssql';
 import { env } from './env';
 
 /**
- * Catatan zona waktu:
- * Kolom datetime2/time di database menyimpan jam dinding WIB tanpa informasi zona.
- * Driver mssql (useUTC = true, default) membacanya sebagai Date "UTC" dengan angka jam yang sama,
- * jadi untuk membaca jam WIB dari hasil query gunakan dayjs.utc(nilai) (lihat utils/datetime.ts).
- * Untuk menulis waktu "sekarang", gunakan SQL_NOW_WIB di sisi SQL, bukan new Date() dari Node.
+ * Kolom datetime2 menyimpan UTC, sedangkan kolom TIME jadwal operasional menyimpan jam WIB.
+ * Gunakan SYSUTCDATETIME() untuk timestamp yang dibuat di SQL dan dayjs.utc() untuk nilai TIME.
  */
 const poolConfig: sql.config = {
   server: env.db.host,

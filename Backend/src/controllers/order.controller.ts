@@ -18,10 +18,10 @@ export const status: RequestHandler = async (req, res, next) => {
     const noKontak = req.query.no_kontak;
     const pool = await getPool();
     const r = await pool.request()
-      .input('kode', sql.VarChar(20), kode)
+      .input('kode', sql.NVarChar(10), kode)
       .query(`
         SELECT id_pesanan, no_kontak, tanggal_acara, waktu_acara, status_pesanan, status_pembayaran, total_harga
-        FROM dbo.Pesanan WHERE kode_pesanan = @kode
+        FROM dbo.pesanan WHERE kode_pesanan = @kode
       `);
     const order = r.recordset[0];
     if (!order) throw new AppError('ERR-ORD-01', 404);
@@ -33,14 +33,14 @@ export const status: RequestHandler = async (req, res, next) => {
 
     const hist = await pool.request()
       .input('id', sql.Int, order.id_pesanan)
-      .query(`SELECT status, waktu FROM dbo.RiwayatStatusPesanan WHERE id_pesanan = @id ORDER BY waktu ASC, id_riwayat ASC`);
+      .query(`SELECT status, waktu FROM dbo.riwayat_status_pesanan WHERE id_pesanan = @id ORDER BY waktu ASC, id_riwayat ASC`);
 
     const saldoRes = await pool.request()
       .input('id', sql.Int, order.id_pesanan)
       .query(`
         SELECT o.total_harga - ISNULL(SUM(CASE WHEN p.status = 'DITERIMA' THEN p.nominal ELSE 0 END), 0) AS saldo
-        FROM dbo.Pesanan o
-        LEFT JOIN dbo.Pembayaran p ON p.id_pesanan = o.id_pesanan
+        FROM dbo.pesanan o
+        LEFT JOIN dbo.pembayaran p ON p.id_pesanan = o.id_pesanan
         WHERE o.id_pesanan = @id
         GROUP BY o.total_harga
       `);
@@ -61,12 +61,12 @@ export const nota: RequestHandler = async (req, res, next) => {
   try {
     const pool = await getPool();
     const r = await pool.request()
-      .input('kode', sql.VarChar(20), req.params.kode as string)
+      .input('kode', sql.NVarChar(10), req.params.kode as string)
       .query(`
         SELECT n.id_nota, n.nomor_nota, n.id_pesanan, n.total_tagihan, n.nominal_dp, n.sisa_pembayaran,
                n.diterbitkan_pada, p.kode_pesanan, p.id_pelanggan
-        FROM dbo.NotaDigital n
-        JOIN dbo.Pesanan p ON p.id_pesanan = n.id_pesanan
+        FROM dbo.nota_digital n
+        JOIN dbo.pesanan p ON p.id_pesanan = n.id_pesanan
         WHERE p.kode_pesanan = @kode
       `);
     const row = r.recordset[0];
@@ -81,8 +81,8 @@ export const nota: RequestHandler = async (req, res, next) => {
       .input('idPesanan', sql.Int, row.id_pesanan)
       .query(`
         SELECT pr.nama_paket, dp.jumlah_porsi AS porsi, dp.harga_satuan, dp.subtotal
-        FROM dbo.DetailPesanan dp
-        JOIN dbo.Produk pr ON pr.id_produk = dp.id_produk
+        FROM dbo.detail_pesanan dp
+        JOIN dbo.produk pr ON pr.id_produk = dp.id_produk
         WHERE dp.id_pesanan = @idPesanan
       `);
 

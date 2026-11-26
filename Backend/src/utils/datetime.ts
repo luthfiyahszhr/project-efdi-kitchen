@@ -10,7 +10,9 @@ export const TZ = 'Asia/Jakarta';
 /** Waktu sekarang dalam WIB. */
 export const nowWIB = () => dayjs().tz(TZ);
 
-/** Waktu sekarang di sisi SQL, WIB tanpa zona (sama dengan default kolom di schema). */
-export const SQL_NOW_WIB = "CAST(SYSDATETIMEOFFSET() AT TIME ZONE 'SE Asia Standard Time' AS DATETIME2(0))";
+export const toWIB = (value: Date | string) => dayjs.utc(value).tz(TZ).format();
+
+/** Waktu sekarang di sisi SQL untuk kolom datetime2 yang menyimpan UTC. */
+export const SQL_NOW_UTC = 'SYSUTCDATETIME()';
 
 export { dayjs };

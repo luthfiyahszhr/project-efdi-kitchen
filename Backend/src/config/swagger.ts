@@ -257,7 +257,11 @@ const options: swaggerJsdoc.OAS3Options = {
         patch: operation('Admin - Produk', 'Ubah status aktif produk', { aktif: false }, 200, 'application/json', 'id_produk'),
       },
       '/api/admin/pembayaran/cari': {
-        post: operation('Admin - Pembayaran', 'Cari pembayaran', { status: 'MENUNGGU_VERIFIKASI' }),
+        post: operation('Admin - Pembayaran', 'Cari pembayaran', {
+          status: 'MENUNGGU_VERIFIKASI',
+          page: 1,
+          page_size: 20,
+        }),
       },
       '/api/admin/pembayaran/{id_pembayaran}/bukti': {
         post: operation('Admin - Pembayaran', 'Pratinjau bukti pembayaran', {}, 200, 'application/json', 'id_pembayaran'),
@@ -269,7 +273,11 @@ const options: swaggerJsdoc.OAS3Options = {
         post: operation('Admin - Pembayaran', 'Catat pembayaran tunai', { jenis: 'DP', nominal: '125000.00' }, 201, 'application/json', 'id_pesanan'),
       },
       '/api/admin/pesanan/cari': {
-        post: operation('Admin - Pesanan', 'Cari daftar pesanan', { tanggal_acara: '2026-11-25' }),
+        post: operation('Admin - Pesanan', 'Cari daftar pesanan', {
+          tanggal_acara: '2026-11-25',
+          page: 1,
+          page_size: 20,
+        }),
       },
       '/api/admin/pesanan/{id_pesanan}/status': {
         patch: operation('Admin - Pesanan', 'Ubah status pesanan', { status_baru: 'MULAI_DIMASAK' }, 200, 'application/json', 'id_pesanan'),
@@ -281,7 +289,10 @@ const options: swaggerJsdoc.OAS3Options = {
         post: operation('Admin - Inventaris', 'Buka input stok'),
       },
       '/api/admin/stok/cari': {
-        post: operation('Admin - Inventaris', 'Cari stok inventaris', {}),
+        post: operation('Admin - Inventaris', 'Cari stok inventaris', {
+          page: 1,
+          page_size: 20,
+        }),
       },
       '/api/admin/item': {
         post: operation('Admin - Inventaris', 'Buat item inventaris', {
@@ -323,7 +334,11 @@ const options: swaggerJsdoc.OAS3Options = {
         post: operation('Admin - Laporan', 'Lihat rekap transaksi', { periode: 'HARIAN', tanggal: '2026-11-20' }),
       },
       '/api/admin/customer/cari': {
-        post: operation('Admin - Customer', 'Cari akun Customer', { kata_kunci: 'Sari' }),
+        post: operation('Admin - Customer', 'Cari akun Customer', {
+          kata_kunci: 'Sari',
+          page: 1,
+          page_size: 20,
+        }),
       },
       '/api/admin/customer/{id_pengguna}/reset-password': {
         post: operation('Admin - Customer', 'Reset password Customer', {

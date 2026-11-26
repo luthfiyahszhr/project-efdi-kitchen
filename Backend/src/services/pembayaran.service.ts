@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { sql, withTransaction } from '../config/database';
 import { AppError } from '../utils/errors';
-import { SQL_NOW_WIB } from '../utils/datetime';
+import { SQL_NOW_UTC } from '../utils/datetime';
 import type { AuthUser } from '../types/express';
 import * as logSvc from './log.service';
 
@@ -22,7 +22,7 @@ export async function uploadBukti({
 
   // CK_Bayar_bukti: TUNAI tanpa bukti, selain TUNAI wajib ada bukti
   if (metode === 'TUNAI') {
-    if (!isStaff) throw new AppError('ERR-AUTH-02', 403, 'Pembayaran tunai hanya dapat dicatat oleh Admin/Owner');
+    if (!isStaff) throw new AppError('ERR-PAY-04', 409);
     if (file) {
       try {
         await fs.promises.unlink(file.path);
@@ -37,10 +37,10 @@ export async function uploadBukti({
   try {
     return await withTransaction(async (trx) => {
       const r = await new sql.Request(trx)
-        .input('kode', sql.VarChar(20), kode)
+        .input('kode', sql.NVarChar(10), kode)
         .query(`
           SELECT id_pesanan, status_pesanan, status_pembayaran, id_pelanggan, total_harga
-          FROM dbo.Pesanan WITH (UPDLOCK, ROWLOCK)
+          FROM dbo.pesanan WITH (UPDLOCK, ROWLOCK)
           WHERE kode_pesanan = @kode
         `);
       const order = r.recordset[0];
@@ -49,15 +49,15 @@ export async function uploadBukti({
 
       // Customer hanya boleh untuk pesanannya sendiri
       if (user.role === 'Customer' && order.id_pelanggan !== user.id) {
-        throw new AppError('ERR-AUTH-02', 403);
+        throw new AppError('ERR-AUTH-03', 403);
       }
 
       // Tidak boleh ada pembayaran jenis sama yang masih menunggu verifikasi
       const pending = await new sql.Request(trx)
         .input('idPesanan', sql.Int, order.id_pesanan)
-        .input('jenis', sql.VarChar(10), jenis)
+        .input('jenis', sql.NVarChar(15), jenis)
         .query(`
-          SELECT TOP 1 id_pembayaran FROM dbo.Pembayaran
+          SELECT TOP 1 id_pembayaran FROM dbo.pembayaran
           WHERE id_pesanan = @idPesanan AND jenis = @jenis AND status = 'MENUNGGU_VERIFIKASI'
         `);
       if (pending.recordset[0]) throw new AppError('ERR-PAY-01', 409);
@@ -66,7 +66,7 @@ export async function uploadBukti({
         if (order.status_pembayaran !== 'BELUM_BAYAR') throw new AppError('ERR-PAY-01', 409);
         const nota = await new sql.Request(trx)
           .input('idPesanan', sql.Int, order.id_pesanan)
-          .query(`SELECT nominal_dp FROM dbo.NotaDigital WHERE id_pesanan = @idPesanan`);
+          .query(`SELECT nominal_dp FROM dbo.nota_digital WHERE id_pesanan = @idPesanan`);
         if (!nota.recordset[0]) throw new AppError('ERR-SYS-01', 500, 'Nota pesanan tidak ditemukan');
         if (sen(nominal) < sen(nota.recordset[0].nominal_dp) || sen(nominal) > sen(order.total_harga)) {
           throw new AppError('ERR-PAY-05', 422);
@@ -77,8 +77,8 @@ export async function uploadBukti({
           .input('idPesanan', sql.Int, order.id_pesanan)
           .query(`
             SELECT o.total_harga - ISNULL(SUM(CASE WHEN p.status = 'DITERIMA' THEN p.nominal ELSE 0 END), 0) AS saldo
-            FROM dbo.Pesanan o
-            LEFT JOIN dbo.Pembayaran p ON p.id_pesanan = o.id_pesanan
+            FROM dbo.pesanan o
+            LEFT JOIN dbo.pembayaran p ON p.id_pesanan = o.id_pesanan
             WHERE o.id_pesanan = @idPesanan
             GROUP BY o.total_harga
           `);
@@ -87,14 +87,14 @@ export async function uploadBukti({
 
       const inserted = await new sql.Request(trx)
         .input('idPesanan', sql.Int, order.id_pesanan)
-        .input('jenis', sql.VarChar(10), jenis)
-        .input('metode', sql.VarChar(10), metode)
-        .input('nominal', sql.Decimal(14, 2), nominal)
+        .input('jenis', sql.NVarChar(15), jenis)
+        .input('metode', sql.NVarChar(15), metode)
+        .input('nominal', sql.Decimal(12, 2), nominal)
         .input('buktiPath', sql.NVarChar(255), metode === 'TUNAI' ? null : file!.filename)
-        .input('statusSebelum', sql.VarChar(25), order.status_pembayaran)
+        .input('statusSebelum', sql.NVarChar(25), order.status_pembayaran)
         .input('dicatatOleh', sql.Int, isStaff ? user.id : null)
         .query(`
-          INSERT INTO dbo.Pembayaran (id_pesanan, jenis, metode, nominal, bukti_path, status, status_sebelum_verifikasi, dicatat_oleh)
+          INSERT INTO dbo.pembayaran (id_pesanan, jenis, metode, nominal, bukti_path, status, status_sebelum_verifikasi, dicatat_oleh)
           OUTPUT INSERTED.id_pembayaran
           VALUES (@idPesanan, @jenis, @metode, @nominal, @buktiPath, 'MENUNGGU_VERIFIKASI', @statusSebelum, @dicatatOleh)
         `);
@@ -104,7 +104,7 @@ export async function uploadBukti({
       if (jenis === 'DP') {
         await new sql.Request(trx)
           .input('idPesanan', sql.Int, order.id_pesanan)
-          .query(`UPDATE dbo.Pesanan SET status_pembayaran = 'MENUNGGU_VERIFIKASI' WHERE id_pesanan = @idPesanan`);
+          .query(`UPDATE dbo.pesanan SET status_pembayaran = 'MENUNGGU_VERIFIKASI' WHERE id_pesanan = @idPesanan`);
       }
 
       await logSvc.log({
@@ -159,16 +159,40 @@ export async function verify({
   }
 
   return withTransaction(async (trx) => {
-    const r = await new sql.Request(trx)
+    const paymentRef = await new sql.Request(trx)
       .input('id', sql.Int, idPembayaran)
       .query(`
-        SELECT p.id_pembayaran, p.id_pesanan, p.jenis, p.nominal, p.status, p.status_sebelum_verifikasi,
-               o.total_harga, o.status_pesanan
-        FROM dbo.Pembayaran p WITH (UPDLOCK, ROWLOCK)
-        JOIN dbo.Pesanan o WITH (UPDLOCK, ROWLOCK) ON o.id_pesanan = p.id_pesanan
-        WHERE p.id_pembayaran = @id
+        SELECT id_pesanan
+        FROM dbo.pembayaran
+        WHERE id_pembayaran = @id
       `);
-    const pay = r.recordset[0];
+    const orderId: number | undefined = paymentRef.recordset[0]?.id_pesanan;
+    if (orderId === undefined) throw new AppError('ERR-ORD-01', 404, 'Pembayaran tidak ditemukan');
+
+    const orderResult = await new sql.Request(trx)
+      .input('id', sql.Int, orderId)
+      .query(`
+        SELECT id_pesanan, total_harga, status_pesanan
+        FROM dbo.pesanan WITH (UPDLOCK, ROWLOCK)
+        WHERE id_pesanan = @id
+      `);
+    const order = orderResult.recordset[0];
+    if (!order) throw new AppError('ERR-ORD-01', 404, 'Pesanan tidak ditemukan');
+
+    const paymentResult = await new sql.Request(trx)
+      .input('id', sql.Int, idPembayaran)
+      .input('orderId', sql.Int, orderId)
+      .query(`
+        SELECT id_pembayaran, id_pesanan, jenis, nominal, status, status_sebelum_verifikasi
+        FROM dbo.pembayaran WITH (UPDLOCK, ROWLOCK)
+        WHERE id_pembayaran = @id AND id_pesanan = @orderId
+      `);
+    const payment = paymentResult.recordset[0];
+    const pay = payment && {
+      ...payment,
+      total_harga: order.total_harga,
+      status_pesanan: order.status_pesanan,
+    };
     if (!pay) throw new AppError('ERR-ORD-01', 404, 'Pembayaran tidak ditemukan');
     if (pay.status !== 'MENUNGGU_VERIFIKASI') throw new AppError('ERR-PAY-03', 409);
     if (pay.status_pesanan === 'DIBATALKAN') throw new AppError('ERR-PAY-06', 409);
@@ -178,8 +202,8 @@ export async function verify({
         .input('id', sql.Int, idPembayaran)
         .input('by', sql.Int, user.id)
         .query(`
-          UPDATE dbo.Pembayaran
-          SET status = 'DITERIMA', diverifikasi_oleh = @by, diverifikasi_pada = ${SQL_NOW_WIB}
+          UPDATE dbo.pembayaran
+          SET status = 'DITERIMA', diverifikasi_oleh = @by, diverifikasi_pada = ${SQL_NOW_UTC}
           WHERE id_pembayaran = @id
         `);
 
@@ -193,10 +217,10 @@ export async function verify({
       const naikKePesananBaru = pay.jenis === 'DP' && pay.status_pesanan === 'MENUNGGU_DP';
       await new sql.Request(trx)
         .input('idPesanan', sql.Int, pay.id_pesanan)
-        .input('statusBayar', sql.VarChar(25), statusBayarBaru)
+        .input('statusBayar', sql.NVarChar(25), statusBayarBaru)
         .input('naik', sql.Bit, naikKePesananBaru)
         .query(`
-          UPDATE dbo.Pesanan
+          UPDATE dbo.pesanan
           SET status_pembayaran = @statusBayar,
               status_pesanan = CASE WHEN @naik = 1 THEN 'PESANAN_BARU' ELSE status_pesanan END
           WHERE id_pesanan = @idPesanan
@@ -207,7 +231,7 @@ export async function verify({
           .input('idPesanan', sql.Int, pay.id_pesanan)
           .input('by', sql.Int, user.id)
           .query(`
-            INSERT INTO dbo.RiwayatStatusPesanan (id_pesanan, status, id_pengguna)
+            INSERT INTO dbo.riwayat_status_pesanan (id_pesanan, status, id_pengguna)
             VALUES (@idPesanan, 'PESANAN_BARU', @by)
           `);
       }
@@ -239,15 +263,15 @@ export async function verify({
       .input('by', sql.Int, user.id)
       .input('alasan', sql.NVarChar(255), alasan)
       .query(`
-        UPDATE dbo.Pembayaran
+        UPDATE dbo.pembayaran
         SET status = 'DITOLAK', alasan_penolakan = @alasan,
-            diverifikasi_oleh = @by, diverifikasi_pada = ${SQL_NOW_WIB}
+            diverifikasi_oleh = @by, diverifikasi_pada = ${SQL_NOW_UTC}
         WHERE id_pembayaran = @id
       `);
     await new sql.Request(trx)
       .input('idPesanan', sql.Int, pay.id_pesanan)
-      .input('statusBayar', sql.VarChar(25), statusKembali)
-      .query(`UPDATE dbo.Pesanan SET status_pembayaran = @statusBayar WHERE id_pesanan = @idPesanan`);
+      .input('statusBayar', sql.NVarChar(25), statusKembali)
+      .query(`UPDATE dbo.pesanan SET status_pembayaran = @statusBayar WHERE id_pesanan = @idPesanan`);
 
     await logSvc.log({
       transaction: trx,

@@ -15,11 +15,11 @@ export const finance: RequestHandler = async (req, res, next) => {
     const pool = await getPool();
     // contoh agregasi sederhana (per hari pesanan dibuat)
     const r = await pool.request()
-      .input('date', sql.VarChar(10), date)
+      .input('date', sql.NVarChar(10), date)
       .query(`
         SELECT COUNT(*) AS total_pesanan,
                ISNULL(SUM(total_harga), 0) AS total_omset
-        FROM dbo.Pesanan
+        FROM dbo.pesanan
         WHERE status_pesanan <> 'DIBATALKAN'
           AND CAST(dibuat_pada AS DATE) = CAST(@date AS DATE)
       `);

@@ -6,7 +6,7 @@ Backend TypeScript untuk API Efdi Kitchen yang mengikuti kontrak endpoint TSD v2
 
 1. Salin `.env.example` menjadi `.env`, lalu isi konfigurasi SQL Server lokal. Jangan commit `.env`.
 2. Daftarkan aplikasi pada Google reCAPTCHA dan isi `GOOGLE_RECAPTCHA_SECRET`. Registrasi Customer akan gagal tertutup bila secret belum dikonfigurasi.
-3. Jalankan skrip database sesuai urutan pada [`db/README.md`](../db/README.md). Migrasi `04-api-session.sql` dan `05-tsd-schema-adjustments.sql` harus diterapkan menggunakan akun yang memiliki izin perubahan skema; keduanya belum dijalankan otomatis oleh backend.
+3. Jalankan skrip database sesuai urutan pada [`db/README.md`](../db/README.md). Skema terbaru sudah mencakup tabel sesi API dan kolom batas minimum inventaris yang nullable; tidak ada lagi migrasi `04` atau `05`.
 4. Instal dependensi dengan `npm install`, lalu jalankan `npm run dev`.
 
 ## Menguji API

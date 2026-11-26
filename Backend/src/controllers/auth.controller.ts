@@ -52,7 +52,7 @@ async function verifyGoogleRecaptcha(token: string): Promise<void> {
   }
 
   const result = await response.json() as { success?: boolean };
-  if (!result.success) throw new AppError('ERR-VAL-08', 422, 'CAPTCHA tidak valid');
+  if (!result.success) throw new AppError('ERR-VAL-08', 422, 'Verifikasi CAPTCHA gagal. Silakan coba lagi.');
 }
 
 export const register: RequestHandler = async (req, res, next) => {
@@ -67,25 +67,25 @@ export const register: RequestHandler = async (req, res, next) => {
     } = req.body;
 
     if (password !== konfirmasi_password) {
-      throw new AppError('ERR-AUTH-06', 422, 'Konfirmasi password tidak sama');
+      throw new AppError('ERR-AUTH-06', 422, 'Konfirmasi password tidak cocok.');
     }
     await verifyGoogleRecaptcha(captcha_token);
 
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await withTransaction(async (trx) => {
       const exists = await new sql.Request(trx)
-        .input('email', sql.NVarChar(150), email.toLowerCase())
-        .query('SELECT TOP 1 id_pengguna FROM dbo.Pengguna WHERE LOWER(email) = @email');
+        .input('email', sql.NVarChar(100), email.toLowerCase())
+        .query('SELECT TOP 1 id_pengguna FROM dbo.pengguna WHERE LOWER(email) = @email');
       if (exists.recordset[0]) {
         throw new AppError('ERR-AUTH-05', 409, 'Email sudah digunakan. Silakan login atau gunakan email lain.');
       }
 
       const inserted = await new sql.Request(trx)
         .input('nama', sql.NVarChar(100), nama_lengkap.trim())
-        .input('email', sql.NVarChar(150), email.toLowerCase())
+        .input('email', sql.NVarChar(100), email.toLowerCase())
         .input('passwordHash', sql.NVarChar(255), passwordHash)
         .query(`
-          INSERT INTO dbo.Pengguna (nama_lengkap, username, email, password_hash, role)
+          INSERT INTO dbo.pengguna (nama_lengkap, username, email, password_hash, role)
           OUTPUT INSERTED.id_pengguna, INSERTED.role
           VALUES (@nama, NULL, @email, @passwordHash, 'Customer')
         `);
@@ -122,7 +122,7 @@ export const login: RequestHandler = async (req, res, next) => {
         .input('identity', sql.NVarChar(100), identity)
         .query(`
           SELECT TOP 1 id_pengguna, nama_lengkap, email, role, password_hash, jumlah_gagal, terkunci_sampai
-          FROM dbo.Pengguna WITH (UPDLOCK, ROWLOCK)
+          FROM dbo.pengguna WITH (UPDLOCK, ROWLOCK)
           WHERE aktif = 1 AND (LOWER(email) = @identity OR LOWER(username) = @identity)
         `);
       const matchedUser = result.recordset[0] as UserRow | undefined;
@@ -140,7 +140,7 @@ export const login: RequestHandler = async (req, res, next) => {
           const failure = await new sql.Request(trx)
             .input('id', sql.Int, matchedUser.id_pengguna)
             .query(`
-            UPDATE dbo.Pengguna
+            UPDATE dbo.pengguna
             SET jumlah_gagal = CASE WHEN terkunci_sampai IS NOT NULL AND terkunci_sampai <= SYSUTCDATETIME()
                                     THEN 1 ELSE jumlah_gagal + 1 END,
                 terkunci_sampai = CASE
@@ -168,7 +168,7 @@ export const login: RequestHandler = async (req, res, next) => {
       await new sql.Request(trx)
         .input('id', sql.Int, matchedUser.id_pengguna)
         .query(`
-          UPDATE dbo.Pengguna
+          UPDATE dbo.pengguna
           SET jumlah_gagal = 0, terkunci_sampai = NULL, terakhir_login = SYSUTCDATETIME()
           WHERE id_pengguna = @id
         `);
