@@ -17,7 +17,6 @@ import { OrderTimeline } from '../../components/ui/DataDisplay';
 import { EmptyState } from '../../components/ui/Feedback';
 import { Button } from '../../components/ui/FormControls';
 import { NotaModal } from '../../components/ui/NotaDocument';
-import { triggerDownloadNotaHtml } from '../../utils/notaDownload';
 import { useApp } from '../../context/AppContext';
 import {
   formatRupiah,
@@ -34,6 +33,7 @@ export const OrderStatusPage: React.FC = () => {
     getVerifiedPaidAmount,
     getRemainingBalance,
     getOrderPayments,
+    downloadNota,
   } = useApp();
 
   const [notaOpen, setNotaOpen] = useState(false);
@@ -117,7 +117,7 @@ export const OrderStatusPage: React.FC = () => {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => triggerDownloadNotaHtml(order, paidAmount)}
+              onClick={() => void downloadNota(order)}
             >
               <Download className="h-4 w-4" aria-hidden="true" />
               Unduh Nota

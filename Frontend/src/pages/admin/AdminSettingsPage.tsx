@@ -30,10 +30,10 @@ export const AdminSettingsPage: React.FC = () => {
     );
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
-    const res = saveOperationalSettings({ mode, jadwal });
+    const res = await saveOperationalSettings({ mode, jadwal });
     if (!res.ok) {
       setErrorMsg(res.error || 'Gagal menyimpan pengaturan.');
     }

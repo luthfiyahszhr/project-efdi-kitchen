@@ -138,7 +138,7 @@ export const OrderFormPage: React.FC = () => {
     setRows((prev) => prev.filter((r) => r.rowKey !== rowKey));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError('');
 
@@ -200,7 +200,7 @@ export const OrderFormPage: React.FC = () => {
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    const res = createOrder({
+    const res = await createOrder({
       namaPelanggan,
       noKontak,
       kanal,

@@ -31,6 +31,7 @@ export const PaymentUploadPage: React.FC = () => {
     getOrderPayments,
     uploadPaymentProof,
     cancelOrderByCustomer,
+    pushToast,
   } = useApp();
 
   const order = orders.find(
@@ -112,7 +113,7 @@ export const PaymentUploadPage: React.FC = () => {
   const secs = secondsLeft % 60;
   const countdownText = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
     setFileError('');
@@ -144,7 +145,7 @@ export const PaymentUploadPage: React.FC = () => {
       return;
     }
 
-    const res = uploadPaymentProof({
+    const res = await uploadPaymentProof({
       orderId: order.id,
       jenis,
       metode,
@@ -393,11 +394,17 @@ export const PaymentUploadPage: React.FC = () => {
             dibatalkan setelah dikonfirmasi.
           </p>
         }
-        onConfirm={() => {
+        onConfirm={async () => {
           setCancelModalOpen(false);
-          const res = cancelOrderByCustomer(order.id);
+          const res = await cancelOrderByCustomer(order.id);
           if (res.ok) {
             navigate(`/pesanan/${order.kodePesanan}`);
+          } else {
+            pushToast({
+              type: 'error',
+              title: 'Pesanan tidak dapat dibatalkan',
+              message: res.error,
+            });
           }
         }}
       />

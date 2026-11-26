@@ -38,10 +38,10 @@ export const AdminCustomersPage: React.FC = () => {
       });
   }, [users, search]);
 
-  const handleConfirmReset = () => {
+  const handleConfirmReset = async () => {
     if (!confirmTarget) return;
     const targetEmail = confirmTarget.email;
-    const res = resetCustomerPassword(confirmTarget.id);
+    const res = await resetCustomerPassword(confirmTarget.id);
     setConfirmTarget(null);
 
     if (!res.ok || !res.tempPassword) {

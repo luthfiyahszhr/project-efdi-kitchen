@@ -1,22 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
-  CheckCircle2,
   Eye,
   EyeOff,
-  RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
 import { CustomerLayout } from '../../components/layout/CustomerLayout';
 import { Button, Input } from '../../components/ui/FormControls';
 import { useApp } from '../../context/AppContext';
-
-function createChallenge() {
-  const a = Math.floor(Math.random() * 8) + 2;
-  const b = Math.floor(Math.random() * 8) + 1;
-  return { a, b, answer: String(a + b) };
-}
+import { renderRecaptcha } from '../../services/recaptcha';
 
 export const RegisterPage: React.FC = () => {
   const { registerCustomer, orderDraft, pushToast } = useApp();
@@ -28,16 +21,58 @@ export const RegisterPage: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
 
-  const [challenge, setChallenge] = useState(() => createChallenge());
-  const [captchaInput, setCaptchaInput] = useState('');
-  const [captchaChecked, setCaptchaChecked] = useState(false);
-
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaError, setCaptchaError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const captchaContainerRef = useRef<HTMLDivElement>(null);
+  const resetCaptchaRef = useRef<(() => void) | null>(null);
+  const destroyCaptchaRef = useRef<(() => void) | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    const container = captchaContainerRef.current;
+    if (!container) return;
+    let active = true;
+
+    void renderRecaptcha(
+      container,
+      (token) => {
+        if (active) {
+          setCaptchaToken(token);
+          setCaptchaError('');
+        }
+      },
+      (message) => {
+        if (active) setCaptchaError(message);
+      },
+    )
+      .then((captchaWidget) => {
+        if (active) {
+          resetCaptchaRef.current = captchaWidget.reset;
+          destroyCaptchaRef.current = captchaWidget.destroy;
+        } else {
+          captchaWidget.destroy();
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setCaptchaError(error instanceof Error ? error.message : 'CAPTCHA gagal dimuat.');
+        }
+      });
+
+    return () => {
+      active = false;
+      destroyCaptchaRef.current?.();
+      resetCaptchaRef.current = null;
+      destroyCaptchaRef.current = null;
+    };
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setServerError('');
+    setCaptchaError('');
     const nextErrors: Record<string, string> = {};
 
     if (namaLengkap.trim().length < 2 || namaLengkap.trim().length > 100) {
@@ -52,30 +87,40 @@ export const RegisterPage: React.FC = () => {
     if (confirmPassword !== password) {
       nextErrors.confirmPassword = 'Konfirmasi kata sandi tidak sama.';
     }
-    if (!captchaChecked || captchaInput.trim() !== challenge.answer) {
-      nextErrors.captcha =
-        'Verifikasi CAPTCHA belum selesai atau jawaban tidak sesuai.';
-    }
-
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-
-    const res = registerCustomer({ namaLengkap, email, password });
-    if (!res.ok) {
-      setServerError(res.error || 'Registrasi gagal.');
+    if (!captchaToken) {
+      setCaptchaError('Centang kotak “I’m not a robot” sebelum mendaftar.');
       return;
     }
 
-    pushToast({
-      type: 'success',
-      title: 'Pendaftaran Berhasil',
-      message: `Selamat datang, ${namaLengkap.trim()}.`,
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await registerCustomer({ namaLengkap, email, password, captchaToken });
+      if (!res.ok) {
+        setServerError(res.error || 'Registrasi gagal.');
+        setCaptchaToken('');
+        resetCaptchaRef.current?.();
+        return;
+      }
 
-    if (orderDraft?.returnToAfterAuth) {
-      navigate(orderDraft.returnToAfterAuth, { replace: true });
-    } else {
-      navigate('/paket', { replace: true });
+      pushToast({
+        type: 'success',
+        title: 'Pendaftaran Berhasil',
+        message: `Selamat datang, ${namaLengkap.trim()}.`,
+      });
+
+      if (orderDraft?.returnToAfterAuth) {
+        navigate(orderDraft.returnToAfterAuth, { replace: true });
+      } else {
+        navigate('/paket', { replace: true });
+      }
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : 'Verifikasi reCAPTCHA gagal.');
+      setCaptchaToken('');
+      resetCaptchaRef.current?.();
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -159,72 +204,21 @@ export const RegisterPage: React.FC = () => {
               error={errors.confirmPassword}
             />
 
-            {/* Local Simulated CAPTCHA */}
-            <div
-              className={`rounded-xl border p-4 ${
-                errors.captcha
-                  ? 'border-[#B42318] bg-[#FEF3F2]'
-                  : 'border-[#DCE5DA] bg-[#F5F7F4]'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#243128]">
-                  <ShieldCheck className="h-4 w-4 text-[#245C3D]" aria-hidden="true" />
-                  Verifikasi Keamanan (CAPTCHA Simulasi)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setChallenge(createChallenge());
-                    setCaptchaInput('');
-                  }}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#245C3D] hover:underline cursor-pointer"
-                >
-                  <RefreshCw className="h-3 w-3" aria-hidden="true" />
-                  Ganti Soal
-                </button>
-              </div>
-
-              <label className="mt-3 flex items-center gap-2.5 text-sm text-[#243128] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={captchaChecked}
-                  onChange={(e) => setCaptchaChecked(e.target.checked)}
-                  className="h-4 w-4 accent-[#245C3D]"
-                />
-                <span>Saya bukan bot otomatis</span>
-                {captchaChecked && captchaInput.trim() === challenge.answer && (
-                  <CheckCircle2 className="h-4 w-4 text-[#137333]" aria-hidden="true" />
-                )}
-              </label>
-
-              <div className="mt-3 flex items-center gap-3">
-                <label
-                  htmlFor="captcha-ans"
-                  className="text-sm font-semibold text-[#243128]"
-                >
-                  Berapa {challenge.a} + {challenge.b} ?
-                </label>
-                <input
-                  id="captcha-ans"
-                  type="text"
-                  inputMode="numeric"
-                  value={captchaInput}
-                  onChange={(e) => setCaptchaInput(e.target.value)}
-                  placeholder="Hasil"
-                  className="h-10 w-24 rounded-lg border border-[#CBD6C8] bg-white px-3 text-sm text-[#243128]"
-                />
-              </div>
-
-              {errors.captcha && (
+            <div className="rounded-xl border border-[#DCE5DA] bg-[#F5F7F4] p-4">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#243128]">
+                <ShieldCheck className="h-4 w-4 text-[#245C3D]" aria-hidden="true" />
+                Pendaftaran dilindungi Google reCAPTCHA.
+              </span>
+              <div className="mt-3 min-h-[78px]" ref={captchaContainerRef} />
+              {captchaError && (
                 <p role="alert" className="mt-2 text-xs font-medium text-[#B42318]">
-                  {errors.captcha}
+                  {captchaError}
                 </p>
               )}
             </div>
 
-            <Button type="submit" variant="primary" className="w-full">
-              Daftar Sekarang
+            <Button type="submit" variant="primary" className="w-full" disabled={isSubmitting}>
+              {isSubmitting ? 'Memverifikasi dan mendaftar...' : 'Daftar Sekarang'}
             </Button>
           </form>
 

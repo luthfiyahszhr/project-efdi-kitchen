@@ -4,16 +4,10 @@ import React, {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useState,
 } from 'react';
 import {
-  INITIAL_INVENTORY,
   INITIAL_OPERATIONAL_SETTINGS,
-  INITIAL_PRODUCTS,
-  INITIAL_USERS,
-  createInitialOrders,
-  createInitialPayments,
 } from '../data/mockData';
 import type {
   EffectiveStoreStatus,
@@ -33,13 +27,72 @@ import type {
   ToastItem,
   UserAccount,
 } from '../types/domain';
-import {
-  computeEffectiveStoreStatus,
-  generateNotaNumber,
-  generateOrderCode,
-  generateTempPassword,
-  getTodayWibDate,
-} from '../utils/format';
+import { ApiError, mutateApi, postApi, resolveMediaUrl, TsdEndpoints } from '../services/api';
+
+interface BackendBootstrap {
+  currentUser: Omit<UserAccount, 'password'>;
+  users: Omit<UserAccount, 'password'>[];
+  products: Product[];
+  inventory: InventoryItem[];
+  orders: Order[];
+  payments: PaymentRecord[];
+  operationalSettings: {
+    mode: 'OTOMATIS' | 'DIBUKA_MANUAL' | 'DITUTUP_MANUAL';
+    jadwal: Array<{
+      hari: OperationalSettings['jadwal'][number]['hari'];
+      aktif: boolean;
+      jamBuka: string;
+      jamTutup: string;
+    }>;
+  } | null;
+}
+
+interface BackendProduct {
+  id_produk: number;
+  nama_paket: string;
+  jenis_paket: Product['jenis'];
+  deskripsi: string;
+  isi_paket: string;
+  harga_per_porsi: string | number;
+  foto_url: string | null;
+}
+
+interface BackendOperationalStatus {
+  status: 'BUKA' | 'TUTUP';
+  mode_pemesanan: 'OTOMATIS' | 'DIBUKA_MANUAL' | 'DITUTUP_MANUAL' | null;
+  jam_buka_berikutnya: string | null;
+  tanpa_jadwal: boolean;
+}
+
+function mapOperationalMode(mode: string | null | undefined): OperationalSettings['mode'] {
+  if (mode === 'DIBUKA_MANUAL') return 'Dibuka Manual';
+  if (mode === 'DITUTUP_MANUAL') return 'Ditutup Manual';
+  return 'Otomatis';
+}
+
+function mapOperationalStatus(status: BackendOperationalStatus): EffectiveStoreStatus {
+  const isOpen = status.status === 'BUKA';
+  return {
+    isOpen,
+    mode: mapOperationalMode(status.mode_pemesanan),
+    reasonText: isOpen
+      ? 'Pemesanan sedang dibuka.'
+      : status.tanpa_jadwal
+        ? 'Pemesanan sedang ditutup.'
+        : 'Pemesanan sedang di luar jam operasional.',
+    nextOpenText: status.jam_buka_berikutnya,
+  };
+}
+
+function dataUrlToFile(dataUrl: string, filename: string): File {
+  const match = dataUrl.match(/^data:(image\/(?:jpeg|png));base64,(.+)$/);
+  if (!match) throw new Error('File harus berupa gambar JPG atau PNG.');
+  const binary = atob(match[2]);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const extension = match[1] === 'image/png' ? '.png' : '.jpg';
+  const name = filename.replace(/\.[^.]+$/, '');
+  return new File([bytes], `${name}${extension}`, { type: match[1] });
+}
 
 export interface StockShortage {
   itemId: number;
@@ -57,6 +110,7 @@ export interface OrderDraft {
 
 interface AppContextValue {
   // Auth & Session
+  authReady: boolean;
   currentUser: UserAccount | null;
   users: UserAccount[];
   failedLoginAttempts: number;
@@ -69,24 +123,25 @@ interface AppContextValue {
   login: (
     identifier: string,
     password: string
-  ) => { ok: boolean; error?: string; user?: UserAccount };
+  ) => Promise<{ ok: boolean; error?: string; user?: UserAccount }>;
   registerCustomer: (data: {
     namaLengkap: string;
     email: string;
     password: string;
-  }) => { ok: boolean; error?: string; user?: UserAccount };
+    captchaToken: string;
+  }) => Promise<{ ok: boolean; error?: string; user?: UserAccount }>;
   logout: (reason?: string) => void;
   simulateSessionExpired: () => void;
   resetCustomerPassword: (
     customerId: number
-  ) => { ok: boolean; tempPassword?: string; error?: string };
+  ) => Promise<{ ok: boolean; tempPassword?: string; error?: string }>;
 
   // Store operational status
   operationalSettings: OperationalSettings;
   effectiveStoreStatus: EffectiveStoreStatus;
   saveOperationalSettings: (
     settings: OperationalSettings
-  ) => { ok: boolean; error?: string };
+  ) => Promise<{ ok: boolean; error?: string }>;
 
   // Products
   products: Product[];
@@ -101,8 +156,8 @@ interface AppContextValue {
     fotoUrl: string;
     aktif: boolean;
     komposisi: ProductComposition[];
-  }) => { ok: boolean; error?: string };
-  toggleProductActive: (productId: number) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }>;
+  toggleProductActive: (productId: number) => Promise<{ ok: boolean; error?: string }>;
 
   // Inventory
   inventory: InventoryItem[];
@@ -112,14 +167,14 @@ interface AppContextValue {
     satuan: InventoryUnit;
     stokAwal: number;
     batasMinimum: number | null;
-  }) => { ok: boolean; error?: string; item?: InventoryItem };
+  }) => Promise<{ ok: boolean; error?: string; item?: InventoryItem }>;
   mutateInventory: (payload: {
     itemId: number;
     jenisMutasi: InventoryMutationType;
     jumlah: number;
     batasMinimum?: number | null;
     keterangan?: string;
-  }) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }>;
 
   // Orders & Payments
   orders: Order[];
@@ -127,6 +182,8 @@ interface AppContextValue {
   getVerifiedPaidAmount: (orderId: number) => number;
   getRemainingBalance: (order: Order) => number;
   getOrderPayments: (orderId: number) => PaymentRecord[];
+  fetchPaymentProof: (paymentId: number) => Promise<string>;
+  downloadNota: (order: Order) => Promise<void>;
   createOrder: (payload: {
     namaPelanggan: string;
     noKontak: string;
@@ -135,7 +192,7 @@ interface AppContextValue {
     waktuAcara: string;
     catatan: string;
     items: { produkId: number; jumlahPorsi: number }[];
-  }) => { ok: boolean; error?: string; order?: Order };
+  }) => Promise<{ ok: boolean; error?: string; order?: Order }>;
   uploadPaymentProof: (payload: {
     orderId: number;
     jenis: PaymentType;
@@ -143,27 +200,27 @@ interface AppContextValue {
     nominal: number;
     buktiUrl: string;
     buktiNamaFile: string;
-  }) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }>;
   verifyPayment: (payload: {
     paymentId: number;
     approved: boolean;
     alasanPenolakan?: string;
-  }) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }>;
   recordCashPayment: (payload: {
     orderId: number;
     jenis: PaymentType;
     nominal: number;
-  }) => { ok: boolean; error?: string };
-  advanceOrderStatus: (orderId: number) => {
+  }) => Promise<{ ok: boolean; error?: string }>;
+  advanceOrderStatus: (orderId: number) => Promise<{
     ok: boolean;
     error?: string;
     shortages?: StockShortage[];
-  };
-  cancelOrderByCustomer: (orderId: number) => { ok: boolean; error?: string };
+  }>;
+  cancelOrderByCustomer: (orderId: number) => Promise<{ ok: boolean; error?: string }>;
   cancelOrderByAdmin: (
     orderId: number,
     alasan: string
-  ) => { ok: boolean; error?: string; summary?: string };
+  ) => Promise<{ ok: boolean; error?: string; summary?: string }>;
 
   // Toasts
   toasts: ToastItem[];
@@ -178,7 +235,8 @@ const SESSION_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [users, setUsers] = useState<UserAccount[]>(INITIAL_USERS);
+  const [authReady, setAuthReady] = useState(false);
+  const [users, setUsers] = useState<UserAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [failedLoginAttempts, setFailedLoginAttempts] = useState(0);
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
@@ -187,12 +245,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [operationalSettings, setOperationalSettings] =
     useState<OperationalSettings>(INITIAL_OPERATIONAL_SETTINGS);
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [inventory, setInventory] = useState<InventoryItem[]>(INITIAL_INVENTORY);
-  const [orders, setOrders] = useState<Order[]>(() => createInitialOrders());
-  const [payments, setPayments] = useState<PaymentRecord[]>(() =>
-    createInitialPayments()
-  );
+  const [storeStatus, setStoreStatus] = useState<EffectiveStoreStatus>({
+    isOpen: false,
+    mode: 'Otomatis',
+    reasonText: 'Memuat status operasional dari server.',
+    nextOpenText: null,
+  });
+  const [products, setProducts] = useState<Product[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   // Live ticker so store status & 8-min countdown react naturally
@@ -201,6 +263,122 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
     const timer = window.setInterval(() => setNowTick(Date.now()), 15000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const applyBootstrap = useCallback((data: BackendBootstrap) => {
+    setCurrentUser(data.currentUser);
+    setUsers(data.users);
+    setProducts(data.products.map((product) => ({
+      ...product,
+      fotoUrl: resolveMediaUrl(product.fotoUrl),
+    })));
+    setInventory(data.inventory);
+    setOrders(data.orders);
+    setPayments(data.payments.map((payment) => ({
+      ...payment,
+      buktiUrl: payment.buktiUrl ? resolveMediaUrl(payment.buktiUrl) : undefined,
+    })));
+    if (data.operationalSettings) {
+      setOperationalSettings({
+        mode: mapOperationalMode(data.operationalSettings.mode),
+        jadwal: data.operationalSettings.jadwal,
+      });
+    }
+    setLastActivityAt(Date.now());
+    setAuthReady(true);
+  }, []);
+  const refreshBootstrap = useCallback(async () => {
+    const data = await postApi<BackendBootstrap>('/app/bootstrap');
+    applyBootstrap(data);
+    return data;
+  }, [applyBootstrap]);
+
+  useEffect(() => {
+    let active = true;
+    const report = (toast: Omit<ToastItem, 'id'>) => {
+      const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setToasts((prev) => [...prev, { ...toast, id }]);
+      window.setTimeout(() => {
+        setToasts((prev) => prev.filter((item) => item.id !== id));
+      }, 4500);
+    };
+    const loadInitialData = async () => {
+      const [sessionResult, catalogResult, statusResult] = await Promise.allSettled([
+        postApi<BackendBootstrap['currentUser']>(TsdEndpoints.auth.me),
+        postApi<{ produk: BackendProduct[] }>(TsdEndpoints.katalog.cari, { kata_kunci: '' }),
+        postApi<BackendOperationalStatus>(TsdEndpoints.operasional.status),
+      ]);
+      if (!active) return;
+
+      if (sessionResult.status === 'fulfilled') {
+        try {
+          await refreshBootstrap();
+          if (!active) return;
+        } catch (error) {
+          report({
+            type: 'error',
+            title: 'Data aplikasi gagal dimuat',
+            message: error instanceof Error ? error.message : 'Tidak dapat memuat data akun.',
+          });
+        }
+      } else if (sessionResult.reason instanceof ApiError && sessionResult.reason.status !== 401) {
+        report({
+          type: 'error',
+          title: 'Sesi gagal diperiksa',
+          message: sessionResult.reason.message,
+        });
+      }
+
+      if (catalogResult.status === 'fulfilled' && sessionResult.status !== 'fulfilled') {
+        setProducts(catalogResult.value.produk.map((row) => ({
+              id: row.id_produk,
+              nama: row.nama_paket,
+              jenis: row.jenis_paket,
+              ringkasanIsi: row.isi_paket,
+              deskripsi: row.deskripsi,
+              isiLengkap: row.isi_paket.split(/\r?\n/).filter(Boolean),
+              hargaPerPorsi: Number(row.harga_per_porsi),
+              fotoUrl: resolveMediaUrl(row.foto_url),
+              aktif: true,
+              komposisi: [],
+            })));
+      } else if (catalogResult.status === 'rejected') {
+        report({
+          type: 'error',
+          title: 'Katalog tidak tersedia',
+          message: catalogResult.reason instanceof Error
+            ? catalogResult.reason.message
+            : 'Gagal memuat katalog dari server.',
+        });
+      }
+
+      if (statusResult.status === 'fulfilled') {
+        setStoreStatus(mapOperationalStatus(statusResult.value));
+      } else {
+        setStoreStatus({
+          isOpen: false,
+          mode: 'Otomatis',
+          reasonText: statusResult.reason instanceof Error
+            ? statusResult.reason.message
+            : 'Status operasional tidak dapat dimuat.',
+          nextOpenText: null,
+        });
+        report({
+          type: 'warning',
+          title: 'Pemesanan ditutup sementara',
+          message: statusResult.reason instanceof Error
+            ? statusResult.reason.message
+            : 'Status operasional tidak dapat dimuat dari server.',
+        });
+      }
+
+      setAuthReady(true);
+    };
+
+    void loadInitialData();
+    return () => {
+      active = false;
+    };
+  }, [refreshBootstrap]);
 
   const pushToast = useCallback((toast: Omit<ToastItem, 'id'>) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -216,7 +394,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const logout = useCallback(
     (reason?: string) => {
+      void postApi(TsdEndpoints.auth.logout).catch((error: unknown) => {
+        pushToast({
+          type: 'error',
+          title: 'Gagal mengakhiri sesi',
+          message: error instanceof Error ? error.message : 'Silakan coba lagi.',
+        });
+      });
       setCurrentUser(null);
+      setUsers([]);
+      setOrders([]);
+      setPayments([]);
+      setInventory([]);
       if (reason) {
         pushToast({
           type: 'warning',
@@ -259,85 +448,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [currentUser, logout]);
 
   const login = useCallback(
-    (identifier: string, password: string) => {
-      const now = Date.now();
-      if (lockedUntil && now < lockedUntil) {
-        const minsLeft = Math.ceil((lockedUntil - now) / 60000);
-        return {
-          ok: false,
-          error: `Akun sementara terkunci selama 15 menit setelah lima kegagalan berturut-turut. Coba lagi dalam sekitar ${minsLeft} menit.`,
-        };
-      }
-      if (lockedUntil && now >= lockedUntil) {
-        setLockedUntil(null);
+    async (identifier: string, password: string) => {
+      try {
+        await postApi(TsdEndpoints.auth.login, {
+          kredensial: identifier.trim(),
+          password,
+        });
+        const data = await refreshBootstrap();
         setFailedLoginAttempts(0);
-      }
-
-      const norm = identifier.trim().toLowerCase();
-      const matched = users.find(
-        (u) =>
-          (u.email.toLowerCase() === norm ||
-            (u.username && u.username.toLowerCase() === norm)) &&
-          u.password === password &&
-          u.aktif
-      );
-
-      if (!matched) {
-        const nextFails = failedLoginAttempts + 1;
-        setFailedLoginAttempts(nextFails);
-        if (nextFails >= 5) {
-          const lockTime = now + 15 * 60 * 1000;
-          setLockedUntil(lockTime);
-          return {
-            ok: false,
-            error:
-              'Terlalu banyak percobaan masuk gagal (5 kali). Akun terkunci selama 15 menit.',
-          };
+        setLockedUntil(null);
+        return { ok: true, user: data.currentUser };
+      } catch (error) {
+        const failures = failedLoginAttempts + 1;
+        setFailedLoginAttempts(failures);
+        if (error instanceof ApiError && error.code === 'ERR-LOCK-01') {
+          setLockedUntil(Date.now() + 15 * 60 * 1000);
         }
         return {
           ok: false,
-          error: 'Email/username atau kata sandi tidak sesuai.',
+          error: error instanceof Error ? error.message : 'Email/username atau kata sandi tidak sesuai.',
         };
       }
-
-      setFailedLoginAttempts(0);
-      setLockedUntil(null);
-      setCurrentUser(matched);
-      setLastActivityAt(now);
-      return { ok: true, user: matched };
     },
-    [failedLoginAttempts, lockedUntil, users]
+    [failedLoginAttempts, refreshBootstrap]
   );
 
   const registerCustomer = useCallback(
-    (data: { namaLengkap: string; email: string; password: string }) => {
-      const emailNorm = data.email.trim().toLowerCase();
-      if (users.some((u) => u.email.toLowerCase() === emailNorm)) {
+    async (data: { namaLengkap: string; email: string; password: string; captchaToken: string }) => {
+      try {
+        await postApi(TsdEndpoints.auth.register, {
+          nama_lengkap: data.namaLengkap.trim(),
+          email: data.email.trim(),
+          password: data.password,
+          konfirmasi_password: data.password,
+          captcha_token: data.captchaToken,
+          asal: orderDraft ? 'PESAN' : 'KATALOG',
+        });
+        const result = await refreshBootstrap();
+        return { ok: true, user: result.currentUser };
+      } catch (error) {
         return {
           ok: false,
-          error: 'Email sudah digunakan oleh akun lain.',
+          error: error instanceof Error ? error.message : 'Registrasi gagal.',
         };
       }
-      const nextId = users.reduce((m, u) => Math.max(m, u.id), 0) + 1;
-      const newUser: UserAccount = {
-        id: nextId,
-        idKode: `CUST-${String(nextId).padStart(3, '0')}`,
-        namaLengkap: data.namaLengkap.trim(),
-        email: data.email.trim(),
-        password: data.password,
-        role: 'Customer',
-        aktif: true,
-      };
-      setUsers((prev) => [...prev, newUser]);
-      setCurrentUser(newUser);
-      setLastActivityAt(Date.now());
-      return { ok: true, user: newUser };
     },
-    [users]
+    [orderDraft, refreshBootstrap]
   );
 
   const resetCustomerPassword = useCallback(
-    (customerId: number) => {
+    async (customerId: number) => {
       if (!currentUser || (currentUser.role !== 'Admin' && currentUser.role !== 'Owner')) {
         return { ok: false, error: 'Akses ditolak.' };
       }
@@ -348,26 +508,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!target.aktif) {
         return { ok: false, error: 'Reset password hanya tersedia untuk Customer aktif.' };
       }
-      const tempPassword = generateTempPassword();
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === customerId
-            ? { ...u, password: tempPassword, mustChangePassword: true }
-            : u
-        )
-      );
-      return { ok: true, tempPassword };
+      try {
+        const result = await postApi<{ password_sementara: string }>(
+          TsdEndpoints.admin.resetPasswordCustomer(customerId),
+          { email_customer: target.email, konfirmasi: true }
+        );
+        return { ok: true, tempPassword: result.password_sementara };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Reset password gagal.',
+        };
+      }
     },
     [currentUser, users]
   );
 
-  const effectiveStoreStatus = useMemo(
-    () => computeEffectiveStoreStatus(operationalSettings, new Date(nowTick)),
-    [operationalSettings, nowTick]
-  );
+  const effectiveStoreStatus = storeStatus;
 
   const saveOperationalSettings = useCallback(
-    (settings: OperationalSettings) => {
+    async (settings: OperationalSettings) => {
       for (const day of settings.jadwal) {
         if (day.aktif) {
           if (!day.jamBuka || !day.jamTutup || day.jamBuka >= day.jamTutup) {
@@ -378,19 +538,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         }
       }
-      setOperationalSettings(settings);
-      pushToast({
-        type: 'success',
-        title: 'Pengaturan Disimpan',
-        message: 'Jadwal dan mode pemesanan Efdi Kitchen berhasil diperbarui.',
-      });
-      return { ok: true };
+      try {
+        await mutateApi('PUT', TsdEndpoints.admin.simpanOperasional, {
+          mode_pemesanan: settings.mode === 'Otomatis'
+            ? 'OTOMATIS'
+            : settings.mode === 'Dibuka Manual'
+              ? 'DIBUKA_MANUAL'
+              : 'DITUTUP_MANUAL',
+          jadwal: settings.jadwal.map((day) => ({
+            hari: day.hari,
+            aktif: day.aktif,
+            jam_buka: day.aktif ? day.jamBuka : null,
+            jam_tutup: day.aktif ? day.jamTutup : null,
+          })),
+        });
+        setOperationalSettings(settings);
+        const status = await postApi<BackendOperationalStatus>(TsdEndpoints.operasional.status);
+        setStoreStatus(mapOperationalStatus(status));
+        pushToast({
+          type: 'success',
+          title: 'Pengaturan Disimpan',
+          message: 'Jadwal dan mode pemesanan Efdi Kitchen berhasil diperbarui.',
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Gagal menyimpan pengaturan.',
+        };
+      }
     },
     [pushToast]
   );
 
   const saveProduct = useCallback(
-    (payload: {
+    async (payload: {
       id?: number;
       nama: string;
       jenis: Product['jenis'];
@@ -422,42 +604,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         return { ok: false, error: 'Harga per porsi harus lebih dari Rp0.' };
       }
 
-      if (payload.id) {
-        setProducts((prev) =>
-          prev.map((p) => (p.id === payload.id ? { ...p, ...payload, nama: payload.nama.trim() } : p))
+      try {
+        const formData = new FormData();
+        formData.append('data', JSON.stringify({
+          nama_paket: payload.nama.trim(),
+          jenis_paket: payload.jenis,
+          deskripsi: payload.deskripsi,
+          isi_paket: payload.isiLengkap.join('\n'),
+          harga_per_porsi: String(payload.hargaPerPorsi),
+          aktif: payload.aktif,
+          komposisi: payload.komposisi.map((composition) => ({
+            id_item: composition.itemId,
+            jumlah_per_porsi: String(composition.jumlahPerPorsi),
+          })),
+        }));
+        if (payload.fotoUrl.startsWith('data:')) {
+          formData.append('foto', dataUrlToFile(payload.fotoUrl, `${payload.nama}.jpg`));
+        }
+        await mutateApi(
+          payload.id ? 'PUT' : 'POST',
+          payload.id
+            ? TsdEndpoints.admin.ubahProduk(payload.id)
+            : TsdEndpoints.admin.buatProduk,
+          formData
         );
+        await refreshBootstrap();
         pushToast({
           type: 'success',
-          title: 'Paket Diperbarui',
+          title: payload.id ? 'Paket Diperbarui' : 'Paket Ditambahkan',
           message: `${payload.nama.trim()} berhasil disimpan.`,
         });
-      } else {
-        const nextId = products.reduce((m, p) => Math.max(m, p.id), 0) + 1;
-        setProducts((prev) => [
-          ...prev,
-          { ...payload, id: nextId, nama: payload.nama.trim() },
-        ]);
-        pushToast({
-          type: 'success',
-          title: 'Paket Ditambahkan',
-          message: `${payload.nama.trim()} ditambahkan ke katalog.`,
-        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Gagal menyimpan produk.',
+        };
       }
-
-      // Mark inventory items as used
-      const usedIds = new Set(payload.komposisi.map((k) => k.itemId));
-      setInventory((prev) =>
-        prev.map((item) =>
-          usedIds.has(item.id) ? { ...item, sudahDigunakan: true } : item
-        )
-      );
-      return { ok: true };
     },
-    [products, pushToast]
+    [products, pushToast, refreshBootstrap]
   );
 
   const toggleProductActive = useCallback(
-    (productId: number) => {
+    async (productId: number) => {
       const prod = products.find((p) => p.id === productId);
       if (!prod) return { ok: false, error: 'Produk tidak ditemukan.' };
       if (!prod.aktif && prod.komposisi.length === 0) {
@@ -467,21 +656,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
       const nextActive = !prod.aktif;
-      setProducts((prev) =>
-        prev.map((p) => (p.id === productId ? { ...p, aktif: nextActive } : p))
-      );
-      pushToast({
-        type: 'info',
-        title: nextActive ? 'Produk Diaktifkan' : 'Produk Dinonaktifkan',
-        message: `${prod.nama} sekarang ${nextActive ? 'tampil di katalog' : 'disembunyikan dari katalog'}.`,
-      });
-      return { ok: true };
+      try {
+        await mutateApi('PATCH', TsdEndpoints.admin.aktifProduk(productId), {
+          aktif: nextActive,
+        });
+        await refreshBootstrap();
+        pushToast({
+          type: 'info',
+          title: nextActive ? 'Produk Diaktifkan' : 'Produk Dinonaktifkan',
+          message: `${prod.nama} sekarang ${nextActive ? 'tampil di katalog' : 'disembunyikan dari katalog'}.`,
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Status produk gagal diperbarui.',
+        };
+      }
     },
-    [products, pushToast]
+    [products, pushToast, refreshBootstrap]
   );
 
   const createInventoryItem = useCallback(
-    (payload: {
+    async (payload: {
       nama: string;
       tipe: InventoryType;
       satuan: InventoryUnit;
@@ -496,32 +693,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
       if (payload.stokAwal < 0) {
         return { ok: false, error: 'Stok awal tidak boleh negatif.' };
       }
-      const nextId = inventory.reduce((m, i) => Math.max(m, i.id), 0) + 1;
-      const newItem: InventoryItem = {
-        id: nextId,
-        nama: payload.nama.trim(),
-        tipe: payload.tipe,
-        satuan: payload.satuan,
-        stok: Number(payload.stokAwal.toFixed(3)),
-        batasMinimum:
-          payload.batasMinimum !== null && !Number.isNaN(payload.batasMinimum)
-            ? Number(payload.batasMinimum.toFixed(3))
-            : null,
-        sudahDigunakan: false,
-      };
-      setInventory((prev) => [...prev, newItem]);
-      pushToast({
-        type: 'success',
-        title: 'Item Ditambahkan',
-        message: `${newItem.nama} (${newItem.tipe}) berhasil ditambahkan.`,
-      });
-      return { ok: true, item: newItem };
+      try {
+        const result = await postApi<{ id_item: number; stok_saat_ini: string }>(
+          TsdEndpoints.admin.buatItem,
+          {
+            nama_item: payload.nama.trim(),
+            tipe: payload.tipe === 'Bahan Baku' ? 'BAHAN_BAKU' : 'KEMASAN',
+            satuan: payload.satuan,
+            stok_awal: payload.stokAwal.toFixed(3),
+            batas_minimum: payload.batasMinimum?.toFixed(3) ?? null,
+          }
+        );
+        await refreshBootstrap();
+        const newItem = inventory.find((item) => item.id === result.id_item) ?? {
+          id: result.id_item,
+          nama: payload.nama.trim(),
+          tipe: payload.tipe,
+          satuan: payload.satuan,
+          stok: Number(result.stok_saat_ini),
+          batasMinimum: payload.batasMinimum,
+          sudahDigunakan: false,
+        };
+        pushToast({
+          type: 'success',
+          title: 'Item Ditambahkan',
+          message: `${newItem.nama} (${newItem.tipe}) berhasil ditambahkan.`,
+        });
+        return { ok: true, item: newItem };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Gagal menambahkan item.',
+        };
+      }
     },
-    [inventory, pushToast]
+    [inventory, pushToast, refreshBootstrap]
   );
 
   const mutateInventory = useCallback(
-    (payload: {
+    async (payload: {
       itemId: number;
       jenisMutasi: InventoryMutationType;
       jumlah: number;
@@ -549,50 +759,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
 
-      let nextStok = target.stok;
-      if (payload.jenisMutasi === 'Tambah') {
-        nextStok = Number((target.stok + payload.jumlah).toFixed(3));
-      } else if (payload.jenisMutasi === 'Kurang') {
+      if (payload.jenisMutasi === 'Kurang') {
         if (payload.jumlah > target.stok) {
           return {
             ok: false,
             error: `Pengurangan (${payload.jumlah} ${target.satuan}) melebihi stok tersedia (${target.stok} ${target.satuan}).`,
           };
         }
-        nextStok = Number((target.stok - payload.jumlah).toFixed(3));
-      } else {
-        nextStok = Number(payload.jumlah.toFixed(3));
       }
 
-      setInventory((prev) =>
-        prev.map((item) =>
-          item.id === payload.itemId
-            ? {
-                ...item,
-                stok: nextStok,
-                batasMinimum:
-                  payload.batasMinimum !== undefined
-                    ? payload.batasMinimum
-                    : item.batasMinimum,
-              }
-            : item
-        )
-      );
-
-      pushToast({
-        type: 'success',
-        title: 'Stok Diperbarui',
-        message: `${target.nama}: stok kini ${nextStok} ${target.satuan}.`,
-      });
-      return { ok: true };
+      try {
+        await postApi(TsdEndpoints.admin.mutasiStok(payload.itemId), {
+          jenis_koreksi: payload.jenisMutasi === 'Tambah'
+            ? 'TAMBAH'
+            : payload.jenisMutasi === 'Kurang'
+              ? 'KURANG'
+              : 'KOREKSI_ABSOLUT',
+          jumlah: payload.jumlah.toFixed(3),
+          keterangan: payload.keterangan?.trim() || undefined,
+        });
+        if (payload.batasMinimum !== undefined) {
+          await mutateApi('PATCH', TsdEndpoints.admin.batasMinimum(payload.itemId), {
+            batas_minimum: payload.batasMinimum?.toFixed(3) ?? null,
+          });
+        }
+        await refreshBootstrap();
+        pushToast({
+          type: 'success',
+          title: 'Stok Diperbarui',
+          message: `${target.nama}: perubahan stok berhasil disimpan.`,
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Gagal memperbarui stok.',
+        };
+      }
     },
-    [inventory, pushToast]
+    [inventory, pushToast, refreshBootstrap]
   );
 
   const getOrderPayments = useCallback(
     (orderId: number) => payments.filter((p) => p.pesananId === orderId),
     [payments]
   );
+
+  const fetchPaymentProof = useCallback(async (paymentId: number) => {
+    const result = await postApi<{ mime_type: string; content_base64: string }>(
+      TsdEndpoints.admin.buktiPembayaran(paymentId)
+    );
+    return `data:${result.mime_type};base64,${result.content_base64}`;
+  }, []);
+
+  const downloadNota = useCallback(async (order: Order) => {
+    try {
+      const lookup = currentUser?.role === 'Customer'
+        ? { kode_pesanan: order.kodePesanan, no_kontak: order.noKontak }
+        : { id_pesanan: order.id };
+      const result = await postApi<{
+        filename: string;
+        mime_type: string;
+        content_base64: string;
+      }>(TsdEndpoints.pesanan.unduhNota, lookup);
+      const binary = atob(result.content_base64);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const blob = new Blob([bytes], { type: result.mime_type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = result.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      pushToast({
+        type: 'error',
+        title: 'Nota gagal diunduh',
+        message: error instanceof Error ? error.message : 'Server tidak dapat membuat nota.',
+      });
+    }
+  }, [currentUser, pushToast]);
 
   const getVerifiedPaidAmount = useCallback(
     (orderId: number) =>
@@ -611,7 +859,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const createOrder = useCallback(
-    (payload: {
+    async (payload: {
       namaPelanggan: string;
       noKontak: string;
       kanal: OrderChannel;
@@ -631,81 +879,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         return { ok: false, error: 'Pilih minimal satu paket katering.' };
       }
 
-      const builtItems = payload.items.map((row) => {
-        const prod = products.find((p) => p.id === row.produkId && p.aktif);
-        if (!prod) {
-          throw new Error('Paket tidak tersedia atau tidak aktif.');
-        }
-        return {
-          produkId: prod.id,
-          namaProduk: prod.nama,
-          jenisPaket: prod.jenis,
-          hargaPerPorsi: prod.hargaPerPorsi,
-          jumlahPorsi: row.jumlahPorsi,
-          subtotal: prod.hargaPerPorsi * row.jumlahPorsi,
+      try {
+        const response = await postApi<{
+          id_pesanan: number;
+          kode_pesanan: string;
+          status_pesanan: string;
+          total_tagihan: string;
+          nota: { nomor_nota: string; nominal_dp: string; sisa_pembayaran: string };
+        }>(TsdEndpoints.pesanan.buat, {
+          nama_pelanggan: payload.namaPelanggan.trim(),
+          no_kontak: payload.noKontak.trim(),
+          tanggal_acara: payload.tanggalAcara,
+          waktu_acara: payload.waktuAcara,
+          catatan: payload.catatan.trim() || null,
+          kanal: payload.kanal === 'Online' ? 'ONLINE' : 'DATANG_LANGSUNG',
+          detail: payload.items.map((item) => ({
+            id_produk: item.produkId,
+            jumlah_porsi: item.jumlahPorsi,
+          })),
+        });
+        const builtItems = payload.items.map((row) => {
+          const product = products.find((item) => item.id === row.produkId);
+          if (!product) throw new Error('Paket yang dipesan tidak ditemukan pada katalog.');
+          return {
+            produkId: product.id,
+            namaProduk: product.nama,
+            jenisPaket: product.jenis,
+            hargaPerPorsi: product.hargaPerPorsi,
+            jumlahPorsi: row.jumlahPorsi,
+            subtotal: product.hargaPerPorsi * row.jumlahPorsi,
+          };
+        });
+        const totalHarga = Number(response.total_tagihan);
+        const createdAt = new Date().toISOString();
+        const newOrder: Order = {
+          id: response.id_pesanan,
+          kodePesanan: response.kode_pesanan,
+          nomorNota: response.nota.nomor_nota,
+          pelangganId: currentUser?.id ?? null,
+          namaPelanggan: payload.namaPelanggan.trim(),
+          noKontak: payload.noKontak.trim(),
+          kanal: payload.kanal,
+          tanggalAcara: payload.tanggalAcara,
+          waktuAcara: payload.waktuAcara,
+          catatan: payload.catatan.trim(),
+          items: builtItems,
+          totalHarga,
+          dpMinimumNota: Number(response.nota.nominal_dp),
+          sisaAwalNota: Number(response.nota.sisa_pembayaran),
+          statusPesanan: 'Menunggu DP',
+          statusPembayaran: 'Belum Bayar',
+          stokSudahDipotong: false,
+          dibuatPada: createdAt,
+          riwayatStatus: [{ status: 'Menunggu DP', waktuWib: createdAt }],
         };
-      });
-
-      const totalHarga = builtItems.reduce((sum, i) => sum + i.subtotal, 0);
-      const dpMinimumNota = Math.ceil(totalHarga * 0.5);
-      const sisaAwalNota = totalHarga - dpMinimumNota;
-      const nowIso = new Date().toISOString();
-      const todayWib = getTodayWibDate();
-      const kodePesanan = generateOrderCode(orders.map((o) => o.kodePesanan));
-      const nomorNota = generateNotaNumber(
-        orders.map((o) => o.nomorNota),
-        todayWib
-      );
-      const nextId = orders.reduce((m, o) => Math.max(m, o.id), 0) + 1;
-
-      const newOrder: Order = {
-        id: nextId,
-        kodePesanan,
-        nomorNota,
-        pelangganId:
-          payload.kanal === 'Online' && currentUser?.role === 'Customer'
-            ? currentUser.id
-            : null,
-        namaPelanggan: payload.namaPelanggan.trim(),
-        noKontak: payload.noKontak.trim(),
-        kanal: payload.kanal,
-        tanggalAcara: payload.tanggalAcara,
-        waktuAcara: payload.waktuAcara,
-        catatan: payload.catatan.trim(),
-        items: builtItems,
-        totalHarga,
-        dpMinimumNota,
-        sisaAwalNota,
-        statusPesanan: 'Menunggu DP',
-        statusPembayaran: 'Belum Bayar',
-        stokSudahDipotong: false,
-        dibuatPada: nowIso,
-        riwayatStatus: [
-          {
-            status: 'Menunggu DP',
-            waktuWib: nowIso,
-            keterangan:
-              payload.kanal === 'Online'
-                ? 'Pesanan dibuat melalui katalog online'
-                : 'Pesanan Datang Langsung dicatat oleh pengelola',
-          },
-        ],
-      };
-
-      setOrders((prev) => [newOrder, ...prev]);
-      setOrderDraft(null);
-      pushToast({
-        type: 'success',
-        title: 'Pesanan Berhasil Dibuat',
-        message: `Kode pesanan Anda: ${kodePesanan}`,
-      });
-      return { ok: true, order: newOrder };
+        setOrders((prev) => [newOrder, ...prev]);
+        setOrderDraft(null);
+        pushToast({
+          type: 'success',
+          title: 'Pesanan Berhasil Dibuat',
+          message: `Kode pesanan Anda: ${response.kode_pesanan}`,
+        });
+        void refreshBootstrap().catch((error: unknown) => {
+          pushToast({
+            type: 'warning',
+            title: 'Pesanan tersimpan',
+            message: error instanceof Error ? error.message : 'Gagal memperbarui data terbaru.',
+          });
+        });
+        return { ok: true, order: newOrder };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Gagal membuat pesanan.',
+        };
+      }
     },
-    [currentUser, effectiveStoreStatus.isOpen, orders, products, pushToast]
+    [currentUser, effectiveStoreStatus.isOpen, products, pushToast, refreshBootstrap]
   );
 
   const uploadPaymentProof = useCallback(
-    (payload: {
+    async (payload: {
       orderId: number;
       jenis: PaymentType;
       metode: Exclude<PaymentMethod, 'Tunai'>;
@@ -755,46 +1009,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       }
 
-      const nowIso = new Date().toISOString();
-      const nextPayId = payments.reduce((m, p) => Math.max(m, p.id), 0) + 1;
-      const newPay: PaymentRecord = {
-        id: nextPayId,
-        pesananId: order.id,
-        kodePesanan: order.kodePesanan,
-        jenis: payload.jenis,
-        metode: payload.metode,
-        nominal: payload.nominal,
-        buktiUrl: payload.buktiUrl,
-        buktiNamaFile: payload.buktiNamaFile,
-        waktuUnggah: nowIso,
-        status: 'Menunggu Verifikasi',
-      };
-
-      setPayments((prev) => [newPay, ...prev]);
-
-      // Note: uploading proof of Pelunasan keeps main payment status as DP Diterima!
-      if (payload.jenis === 'DP' && order.statusPembayaran === 'Belum Bayar') {
-        setOrders((prev) =>
-          prev.map((o) =>
-            o.id === order.id
-              ? { ...o, statusPembayaran: 'Menunggu Verifikasi' }
-              : o
-          )
+      try {
+        const formData = new FormData();
+        formData.append('jenis', payload.jenis === 'DP' ? 'DP' : 'PELUNASAN');
+        formData.append('metode', payload.metode === 'QRIS' ? 'QRIS' : 'TRANSFER');
+        formData.append('nominal', String(payload.nominal));
+        formData.append('file_bukti', dataUrlToFile(payload.buktiUrl, payload.buktiNamaFile));
+        const result = await mutateApi<{ id_pembayaran: number; status: string }>(
+          'POST',
+          TsdEndpoints.pesanan.unggahBukti(order.id),
+          formData
         );
+        const nowIso = new Date().toISOString();
+        setPayments((prev) => [{
+          id: result.id_pembayaran,
+          pesananId: order.id,
+          kodePesanan: order.kodePesanan,
+          jenis: payload.jenis,
+          metode: payload.metode,
+          nominal: payload.nominal,
+          buktiUrl: payload.buktiUrl,
+          buktiNamaFile: payload.buktiNamaFile,
+          waktuUnggah: nowIso,
+          status: 'Menunggu Verifikasi',
+        }, ...prev]);
+        void refreshBootstrap().catch((error: unknown) => {
+          pushToast({
+            type: 'warning',
+            title: 'Bukti tersimpan',
+            message: error instanceof Error ? error.message : 'Gagal memperbarui status pembayaran.',
+          });
+        });
+        pushToast({
+          type: 'success',
+          title: 'Bukti Pembayaran Terunggah',
+          message: 'Pengelola akan mencocokkan bukti dengan mutasi dana secara manual.',
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Gagal mengunggah bukti pembayaran.',
+        };
       }
-
-      pushToast({
-        type: 'success',
-        title: 'Bukti Pembayaran Terunggah',
-        message: 'Pengelola akan mencocokkan bukti dengan mutasi dana secara manual.',
-      });
-      return { ok: true };
     },
-    [getRemainingBalance, orders, payments, pushToast]
+    [getRemainingBalance, orders, payments, pushToast, refreshBootstrap]
   );
 
   const verifyPayment = useCallback(
-    (payload: { paymentId: number; approved: boolean; alasanPenolakan?: string }) => {
+    async (payload: { paymentId: number; approved: boolean; alasanPenolakan?: string }) => {
       const target = payments.find((p) => p.id === payload.paymentId);
       if (!target) return { ok: false, error: 'Data pembayaran tidak ditemukan.' };
       if (target.status !== 'Menunggu Verifikasi') {
@@ -810,89 +1073,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       }
 
-      const nowIso = new Date().toISOString();
-      const verifierName = currentUser?.namaLengkap ?? 'Admin';
-
-      const updatedPayments = payments.map((p) =>
-        p.id === target.id
-          ? {
-              ...p,
-              status: payload.approved ? ('Diterima' as const) : ('Ditolak' as const),
-              alasanPenolakan: payload.approved
-                ? undefined
-                : payload.alasanPenolakan?.trim(),
-              diverifikasiPada: nowIso,
-              diverifikasiOleh: verifierName,
-            }
-          : p
-      );
-      setPayments(updatedPayments);
-
-      const order = orders.find((o) => o.id === target.pesananId);
-      if (order) {
-        const totalAccepted = updatedPayments
-          .filter((p) => p.pesananId === order.id && p.status === 'Diterima')
-          .reduce((s, p) => s + p.nominal, 0);
-
-        setOrders((prev) =>
-          prev.map((o) => {
-            if (o.id !== order.id) return o;
-            if (!payload.approved) {
-              const hasOtherPendingDp = updatedPayments.some(
-                (p) =>
-                  p.pesananId === o.id &&
-                  p.jenis === 'DP' &&
-                  p.status === 'Menunggu Verifikasi'
-              );
-              const nextPayStatus =
-                totalAccepted >= o.totalHarga
-                  ? 'Lunas'
-                  : totalAccepted > 0
-                  ? 'DP Diterima'
-                  : hasOtherPendingDp
-                  ? 'Menunggu Verifikasi'
-                  : 'Belum Bayar';
-              return { ...o, statusPembayaran: nextPayStatus };
-            }
-
-            const nextPayStatus =
-              totalAccepted >= o.totalHarga ? 'Lunas' : 'DP Diterima';
-
-            // Approving DP moves Menunggu DP -> Pesanan Baru; approving Pelunasan does NOT advance production
-            const shouldAdvanceToNew =
-              target.jenis === 'DP' && o.statusPesanan === 'Menunggu DP';
-
-            return {
-              ...o,
-              statusPembayaran: nextPayStatus,
-              statusPesanan: shouldAdvanceToNew ? 'Pesanan Baru' : o.statusPesanan,
-              riwayatStatus: shouldAdvanceToNew
-                ? [
-                    ...o.riwayatStatus,
-                    {
-                      status: 'Pesanan Baru',
-                      waktuWib: nowIso,
-                      keterangan: `DP diterima (${verifierName})`,
-                    },
-                  ]
-                : o.riwayatStatus,
-            };
-          })
-        );
+      try {
+        await postApi(TsdEndpoints.admin.verifikasiPembayaran(payload.paymentId), {
+          keputusan: payload.approved ? 'DITERIMA' : 'DITOLAK',
+          alasan_penolakan: payload.approved ? undefined : payload.alasanPenolakan?.trim(),
+        });
+        await refreshBootstrap();
+        pushToast({
+          type: payload.approved ? 'success' : 'warning',
+          title: payload.approved ? 'Pembayaran Diterima' : 'Pembayaran Ditolak',
+          message: `Pesanan ${target.kodePesanan} berhasil diperbarui.`,
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Verifikasi pembayaran gagal.',
+        };
       }
-
-      pushToast({
-        type: payload.approved ? 'success' : 'warning',
-        title: payload.approved ? 'Pembayaran Diterima' : 'Pembayaran Ditolak',
-        message: `Pesanan ${target.kodePesanan} berhasil diperbarui.`,
-      });
-      return { ok: true };
     },
-    [currentUser, orders, payments, pushToast]
+    [payments, pushToast, refreshBootstrap]
   );
 
   const recordCashPayment = useCallback(
-    (payload: { orderId: number; jenis: PaymentType; nominal: number }) => {
+    async (payload: { orderId: number; jenis: PaymentType; nominal: number }) => {
       const order = orders.find((o) => o.id === payload.orderId);
       if (!order) return { ok: false, error: 'Pesanan tidak ditemukan.' };
       if (order.kanal !== 'Datang Langsung') {
@@ -923,61 +1127,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
 
-      const nowIso = new Date().toISOString();
-      const verifierName = currentUser?.namaLengkap ?? 'Admin';
-      const nextPayId = payments.reduce((m, p) => Math.max(m, p.id), 0) + 1;
-      const newPay: PaymentRecord = {
-        id: nextPayId,
-        pesananId: order.id,
-        kodePesanan: order.kodePesanan,
-        jenis: payload.jenis,
-        metode: 'Tunai',
-        nominal: payload.nominal,
-        waktuUnggah: nowIso,
-        status: 'Diterima',
-        diverifikasiPada: nowIso,
-        diverifikasiOleh: verifierName,
-      };
-      const updatedPayments = [newPay, ...payments];
-      setPayments(updatedPayments);
-
-      const totalAccepted = updatedPayments
-        .filter((p) => p.pesananId === order.id && p.status === 'Diterima')
-        .reduce((s, p) => s + p.nominal, 0);
-
-      setOrders((prev) =>
-        prev.map((o) => {
-          if (o.id !== order.id) return o;
-          const nextPayStatus =
-            totalAccepted >= o.totalHarga ? 'Lunas' : 'DP Diterima';
-          const shouldAdvanceToNew =
-            payload.jenis === 'DP' && o.statusPesanan === 'Menunggu DP';
-          return {
-            ...o,
-            statusPembayaran: nextPayStatus,
-            statusPesanan: shouldAdvanceToNew ? 'Pesanan Baru' : o.statusPesanan,
-            riwayatStatus: shouldAdvanceToNew
-              ? [
-                  ...o.riwayatStatus,
-                  {
-                    status: 'Pesanan Baru',
-                    waktuWib: nowIso,
-                    keterangan: `Pembayaran tunai diterima (${verifierName})`,
-                  },
-                ]
-              : o.riwayatStatus,
-          };
-        })
-      );
-
-      pushToast({
-        type: 'success',
-        title: 'Pembayaran Tunai Dicatat',
-        message: `Pembayaran tunai untuk ${order.kodePesanan} berhasil tercatat.`,
-      });
-      return { ok: true };
+      try {
+        await postApi(TsdEndpoints.admin.catatTunai(order.id), {
+          jenis: payload.jenis === 'DP' ? 'DP' : 'PELUNASAN',
+          nominal: payload.nominal.toFixed(2),
+        });
+        await refreshBootstrap();
+        pushToast({
+          type: 'success',
+          title: 'Pembayaran Tunai Dicatat',
+          message: `Pembayaran tunai untuk ${order.kodePesanan} berhasil tercatat.`,
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Pembayaran tunai gagal dicatat.',
+        };
+      }
     },
-    [currentUser, getRemainingBalance, orders, payments, pushToast]
+    [getRemainingBalance, orders, pushToast, refreshBootstrap]
   );
 
   const computeOrderInventoryNeeds = useCallback(
@@ -1000,7 +1169,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const advanceOrderStatus = useCallback(
-    (orderId: number) => {
+    async (orderId: number) => {
       const order = orders.find((o) => o.id === orderId);
       if (!order) return { ok: false, error: 'Pesanan tidak ditemukan.' };
 
@@ -1065,18 +1234,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
             };
           }
 
-          // Deduct stock once
-          setInventory((prev) =>
-            prev.map((inv) => {
-              const deduct = needs.get(inv.id);
-              if (!deduct) return inv;
-              return {
-                ...inv,
-                stok: Number(Math.max(0, inv.stok - deduct).toFixed(3)),
-                sudahDigunakan: true,
-              };
-            })
-          );
         }
       }
 
@@ -1087,45 +1244,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
 
-      const nowIso = new Date().toISOString();
-      setOrders((prev) =>
-        prev.map((o) =>
-          o.id === order.id
-            ? {
-                ...o,
-                statusPesanan: nextStatus,
-                stokSudahDipotong:
-                  nextStatus === 'Mulai Dimasak' ? true : o.stokSudahDipotong,
-                selesaiPada:
-                  nextStatus === 'Pesanan Selesai' ? nowIso : o.selesaiPada,
-                riwayatStatus: [
-                  ...o.riwayatStatus,
-                  {
-                    status: nextStatus,
-                    waktuWib: nowIso,
-                    keterangan:
-                      nextStatus === 'Mulai Dimasak' && !o.stokSudahDipotong
-                        ? 'Stok bahan dan kemasan dikurangi otomatis'
-                        : undefined,
-                  },
-                ],
-              }
-            : o
-        )
-      );
-
-      pushToast({
-        type: 'success',
-        title: 'Status Pesanan Diperbarui',
-        message: `${order.kodePesanan} kini berstatus ${nextStatus}.`,
-      });
-      return { ok: true };
+      const statusMap: Record<OrderStatus, string> = {
+        'Menunggu DP': 'MENUNGGU_DP',
+        'Pesanan Baru': 'PESANAN_BARU',
+        'Mulai Dimasak': 'MULAI_DIMASAK',
+        'Sedang Dipacking': 'SEDANG_DIPACKING',
+        'Siap Diambil': 'SIAP_DIAMBIL',
+        'Pesanan Selesai': 'SELESAI',
+        Dibatalkan: 'DIBATALKAN',
+      };
+      try {
+        await mutateApi(
+          'PATCH',
+          TsdEndpoints.admin.ubahStatusPesanan(orderId),
+          { status_baru: statusMap[nextStatus] }
+        );
+        await refreshBootstrap();
+        pushToast({
+          type: 'success',
+          title: 'Status Pesanan Diperbarui',
+          message: `${order.kodePesanan} kini berstatus ${nextStatus}.`,
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Status pesanan gagal diperbarui.',
+        };
+      }
     },
-    [computeOrderInventoryNeeds, inventory, orders, pushToast]
+    [computeOrderInventoryNeeds, inventory, orders, pushToast, refreshBootstrap]
   );
 
   const cancelOrderByCustomer = useCallback(
-    (orderId: number) => {
+    async (orderId: number) => {
       const order = orders.find((o) => o.id === orderId);
       if (!order) return { ok: false, error: 'Pesanan tidak ditemukan.' };
       if (!currentUser || order.pelangganId !== currentUser.id) {
@@ -1149,39 +1301,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
 
-      const nowIso = new Date().toISOString();
-      setOrders((prev) =>
-        prev.map((o) =>
-          o.id === order.id
-            ? {
-                ...o,
-                statusPesanan: 'Dibatalkan',
-                alasanPembatalan: 'Dibatalkan mandiri oleh pelanggan dalam batas waktu 8 menit.',
-                riwayatStatus: [
-                  ...o.riwayatStatus,
-                  {
-                    status: 'Dibatalkan',
-                    waktuWib: nowIso,
-                    keterangan: 'Pembatalan mandiri oleh pelanggan',
-                  },
-                ],
-              }
-            : o
-        )
-      );
-
-      pushToast({
-        type: 'info',
-        title: 'Pesanan Dibatalkan',
-        message: `Pesanan ${order.kodePesanan} telah dibatalkan.`,
-      });
-      return { ok: true };
+      try {
+        await postApi(TsdEndpoints.pesanan.batal(orderId), {
+          alasan_pembatalan: 'Dibatalkan mandiri oleh pelanggan dalam batas waktu 8 menit.',
+        });
+        await refreshBootstrap();
+        pushToast({
+          type: 'info',
+          title: 'Pesanan Dibatalkan',
+          message: `Pesanan ${order.kodePesanan} telah dibatalkan.`,
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Pesanan tidak dapat dibatalkan.',
+        };
+      }
     },
-    [currentUser, orders, payments, pushToast]
+    [currentUser, orders, payments, pushToast, refreshBootstrap]
   );
 
   const cancelOrderByAdmin = useCallback(
-    (orderId: number, alasan: string) => {
+    async (orderId: number, alasan: string) => {
       const order = orders.find((o) => o.id === orderId);
       if (!order) return { ok: false, error: 'Pesanan tidak ditemukan.' };
       if (!alasan.trim()) return { ok: false, error: 'Alasan pembatalan wajib diisi.' };
@@ -1195,69 +1337,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
           order.statusPesanan === 'Sedang Dipacking' ||
           order.statusPesanan === 'Siap Diambil');
 
-      if (shouldRestock) {
-        const needs = computeOrderInventoryNeeds(order);
-        setInventory((prev) =>
-          prev.map((inv) => {
-            const addBack = needs.get(inv.id);
-            if (!addBack) return inv;
-            return {
-              ...inv,
-              stok: Number((inv.stok + addBack).toFixed(3)),
-            };
-          })
-        );
-      }
-
-      let voidCount = 0;
-      setPayments((prev) =>
-        prev.map((p) => {
-          if (p.pesananId === order.id && p.status === 'Menunggu Verifikasi') {
-            voidCount += 1;
-            return { ...p, status: 'VOID' };
-          }
-          return p;
-        })
-      );
-
-      const nowIso = new Date().toISOString();
       const summaryParts: string[] = [];
       if (shouldRestock) summaryParts.push('stok bahan/kemasan dikembalikan');
       else summaryParts.push('tidak ada pengembalian stok');
+      const voidCount = payments.filter(
+        (payment) => payment.pesananId === order.id && payment.status === 'Menunggu Verifikasi'
+      ).length;
       if (voidCount > 0) summaryParts.push(`${voidCount} pembayaran menunggu diubah menjadi VOID`);
       summaryParts.push('pembayaran yang sudah diterima tetap tercatat');
 
-      setOrders((prev) =>
-        prev.map((o) =>
-          o.id === order.id
-            ? {
-                ...o,
-                statusPesanan: 'Dibatalkan',
-                alasanPembatalan: alasan.trim(),
-                riwayatStatus: [
-                  ...o.riwayatStatus,
-                  {
-                    status: 'Dibatalkan',
-                    waktuWib: nowIso,
-                    keterangan: `Dibatalkan pengelola: ${alasan.trim()}`,
-                  },
-                ],
-              }
-            : o
-        )
-      );
-
-      pushToast({
-        type: 'warning',
-        title: 'Pesanan Dibatalkan',
-        message: `${order.kodePesanan} dibatalkan (${summaryParts.join(', ')}).`,
-      });
-      return { ok: true, summary: summaryParts.join(', ') };
+      try {
+        await mutateApi(
+          'PATCH',
+          TsdEndpoints.admin.ubahStatusPesanan(orderId),
+          { status_baru: 'DIBATALKAN', alasan_pembatalan: alasan.trim() }
+        );
+        await refreshBootstrap();
+        pushToast({
+          type: 'warning',
+          title: 'Pesanan Dibatalkan',
+          message: `${order.kodePesanan} dibatalkan (${summaryParts.join(', ')}).`,
+        });
+        return { ok: true, summary: summaryParts.join(', ') };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Pembatalan pesanan gagal.',
+        };
+      }
     },
-    [computeOrderInventoryNeeds, orders, pushToast]
+    [orders, payments, pushToast, refreshBootstrap]
   );
 
   const value: AppContextValue = {
+    authReady,
     currentUser,
     users,
     failedLoginAttempts,
@@ -1286,6 +1399,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
     getVerifiedPaidAmount,
     getRemainingBalance,
     getOrderPayments,
+    fetchPaymentProof,
+    downloadNota,
     createOrder,
     uploadPaymentProof,
     verifyPayment,

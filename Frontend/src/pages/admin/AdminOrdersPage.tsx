@@ -21,7 +21,6 @@ import {
   Select,
   Textarea,
 } from '../../components/ui/FormControls';
-import { triggerDownloadNotaHtml } from '../../utils/notaDownload';
 import { type StockShortage, useApp } from '../../context/AppContext';
 import type { Order, OrderStatus } from '../../types/domain';
 import {
@@ -47,6 +46,7 @@ export const AdminOrdersPage: React.FC = () => {
     getRemainingBalance,
     advanceOrderStatus,
     cancelOrderByAdmin,
+    downloadNota,
   } = useApp();
   const navigate = useNavigate();
 
@@ -88,10 +88,10 @@ export const AdminOrdersPage: React.FC = () => {
     setStatusError('');
   };
 
-  const handleAdvance = (orderId: number) => {
+  const handleAdvance = async (orderId: number) => {
     setShortages([]);
     setStatusError('');
-    const res = advanceOrderStatus(orderId);
+    const res = await advanceOrderStatus(orderId);
     if (!res.ok) {
       setStatusError(res.error || 'Gagal memperbarui status.');
       if (res.shortages) setShortages(res.shortages);
@@ -112,13 +112,13 @@ export const AdminOrdersPage: React.FC = () => {
     return { pendingPayCount, verifiedPaid, willRestock };
   };
 
-  const handleConfirmCancel = () => {
+  const handleConfirmCancel = async () => {
     if (!selectedOrder) return;
     if (!cancelReason.trim()) {
       setCancelError('Alasan pembatalan wajib diisi.');
       return;
     }
-    const res = cancelOrderByAdmin(selectedOrder.id, cancelReason);
+    const res = await cancelOrderByAdmin(selectedOrder.id, cancelReason);
     if (!res.ok) {
       setCancelError(res.error || 'Gagal membatalkan pesanan.');
       return;
@@ -431,7 +431,7 @@ export const AdminOrdersPage: React.FC = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => triggerDownloadNotaHtml(selectedOrder, paid)}
+                    onClick={() => void downloadNota(selectedOrder)}
                   >
                     <Download className="h-4 w-4" aria-hidden="true" />
                     Unduh Nota

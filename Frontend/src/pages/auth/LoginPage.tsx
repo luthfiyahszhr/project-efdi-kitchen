@@ -30,7 +30,9 @@ export const LoginPage: React.FC = () => {
   const fromState = (location.state as { from?: string } | null)?.from;
   const isLocked = isAccountLocked;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -39,35 +41,33 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
-    const res = login(identifier, password);
-    if (!res.ok || !res.user) {
-      setErrorMsg(res.error || 'Email/username atau kata sandi tidak sesuai.');
-      return;
+    setIsSubmitting(true);
+    try {
+      const res = await login(identifier, password);
+      if (!res.ok || !res.user) {
+        setErrorMsg(res.error || 'Email/username atau kata sandi tidak sesuai.');
+        return;
+      }
+
+      if (res.user.role === 'Admin' || res.user.role === 'Owner') {
+        navigate('/admin', { replace: true });
+        return;
+      }
+
+      if (orderDraft?.returnToAfterAuth) {
+        navigate(orderDraft.returnToAfterAuth, { replace: true });
+        return;
+      }
+
+      if (fromState && fromState !== '/login' && fromState !== '/register') {
+        navigate(fromState, { replace: true });
+        return;
+      }
+
+      navigate('/paket', { replace: true });
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Role determined by account: Admin/Owner -> /admin; Customer -> /pesan (if from Pesan) or /paket
-    if (res.user.role === 'Admin' || res.user.role === 'Owner') {
-      navigate('/admin', { replace: true });
-      return;
-    }
-
-    if (orderDraft?.returnToAfterAuth) {
-      navigate(orderDraft.returnToAfterAuth, { replace: true });
-      return;
-    }
-
-    if (fromState && fromState !== '/login' && fromState !== '/register') {
-      navigate(fromState, { replace: true });
-      return;
-    }
-
-    navigate('/paket', { replace: true });
-  };
-
-  const fillDemo = (idVal: string, pwVal: string) => {
-    setIdentifier(idVal);
-    setPassword(pwVal);
-    setErrorMsg('');
   };
 
   return (
@@ -187,7 +187,7 @@ export const LoginPage: React.FC = () => {
                 }
               />
 
-              <Button type="submit" variant="primary" className="w-full" disabled={isLocked}>
+              <Button type="submit" variant="primary" className="w-full" disabled={isLocked || isSubmitting}>
                 Masuk
               </Button>
             </form>
@@ -208,38 +208,6 @@ export const LoginPage: React.FC = () => {
               </p>
             </div>
 
-            {/* Prototype Helper Card */}
-            <div className="mt-6 rounded-xl border border-[#DCE5DA] bg-[#F5F7F4] p-4">
-              <p className="text-xs font-bold text-[#243128]">
-                Akun Demonstrasi Prototipe (Peran ditentukan otomatis oleh akun)
-              </p>
-              <div className="mt-2.5 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => fillDemo('budi.santoso@gmail.com', 'customer123')}
-                  className="rounded-lg border border-[#CBD6C8] bg-white px-3 py-1.5 text-xs font-semibold text-[#243128] hover:bg-[#EEF5EC] cursor-pointer"
-                >
-                  Customer (Budi)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fillDemo('admin1', 'admin123')}
-                  className="rounded-lg border border-[#CBD6C8] bg-white px-3 py-1.5 text-xs font-semibold text-[#243128] hover:bg-[#EEF5EC] cursor-pointer"
-                >
-                  Admin (admin1)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fillDemo('owner', 'owner123')}
-                  className="rounded-lg border border-[#CBD6C8] bg-white px-3 py-1.5 text-xs font-semibold text-[#243128] hover:bg-[#EEF5EC] cursor-pointer"
-                >
-                  Owner (owner)
-                </button>
-              </div>
-              <p className="mt-2 text-[11px] text-[#55645A]">
-                Sesi aktif akan berakhir otomatis setelah 60 menit tidak ada aktivitas.
-              </p>
-            </div>
           </div>
         </div>
       </div>
