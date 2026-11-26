@@ -1,14 +1,12 @@
-# Database EfdiKitchenDB (SQL Server)
+np# Database EfdiKitchenDB (SQL Server)
 
-Skrip ini berisi inisialisasi skema dan data *seed* + migrasi data historis untuk sistem manajemen pemesanan dan produksi **EFDI Kitchen**.
+Skrip ini berisi inisialisasi skema dan data *seed* untuk sistem manajemen pemesanan dan produksi **EFDI Kitchen**.
 
 ## Cara Menjalankan di SSMS
-1. Buka **SQL Server Management Studio (SSMS)** dan buat database kosong bernama `EfdiKitchenDB` (jika belum ada).
-2. Buka file `.sql` di folder ini melalui SSMS, pastikan target database aktif mengarah ke `EfdiKitchenDB`.
-3. Klik **Execute** (`F5`) dan pastikan seluruh baris tereksekusi tanpa *error*.
+Jalankan berurutan menggunakan **SQL Server Management Studio (SSMS)**. `01-create-database-and-user.sql` membuat database; skema baru juga dapat membuatnya jika belum ada.
 
 ## Ringkasan Data Seed
-* **Total Tabel (12):** `Pengguna`, `PengaturanPemesanan`, `JadwalOperasional`, `Pesanan`, `Pembayaran`, `RiwayatStatusPesanan`, `ItemInventaris`, `LogAktivitas`, `Produk`, `KomposisiPaket`, `DetailPesanan`, dan `NotaDigital`.
+* **Total Tabel (14):** 13 tabel bisnis dan `ApiSession` untuk sesi API.
 * **Data Transaksi (86 Pesanan):**
   * `EFD-TEST01` (`id_pesanan = 1`): Data uji coba skenario pesanan dibatalkan (`DIBATALKAN`).
   * `EFD-260001` s.d. `EFD-260085` (`id_pesanan = 2..86`): 85 transaksi migrasi historis berstatus `SELESAI` dan `LUNAS` (total omzet historis Rp 77.148.040,00).
@@ -22,11 +20,11 @@ Skrip ini berisi inisialisasi skema dan data *seed* + migrasi data historis untu
 Jalankan file `.sql` di folder ini secara berurutan melalui **SQL Server Management Studio (SSMS)** dengan menekan **Execute** (`F5`) pada masing-masing file:
 1. `00-setup-mixed-mode.sql` — Mengaktifkan autentikasi *Mixed Mode* (SQL Server & Windows Authentication) jika belum aktif.
 2. `01-create-database-and-user.sql` — Membuat database `EfdiKitchenDB` beserta *login/user* aplikasi.
-3. `02-schema.sql` — Membuat seluruh struktur 12 tabel, *primary key*, *foreign key*, dan *constraint* pada `EfdiKitchenDB`.
+3. `02-schema.sql` — Membuat tabel, indeks, fungsi, *view*, dan *trigger* sesuai skema terbaru.
 4. `03-seed.sql` — Mengisi data awal (*seed*) serta migrasi 85 transaksi historis ke dalam tabel.
-5. `04-api-session.sql` — Membuat penyimpanan sesi SQL-backed yang dipakai autentikasi API.
-6. `05-tsd-schema-adjustments.sql` — Mengizinkan `batas_minimum` inventaris bernilai `NULL`, sesuai kontrak TSD.
 
-Jalankan migrasi 04 dan 05 dengan akun database yang memiliki izin perubahan skema (bukan akun runtime aplikasi). Kedua migrasi harus selesai sebelum menjalankan versi backend yang memakai sesi SQL dan batas stok nullable.
+Skema terbaru sudah membuat tabel `ApiSession` dan mengizinkan `batas_minimum` bernilai `NULL`; file migrasi `04` dan `05` tidak diperlukan. Pastikan menjalankan skema sebelum seed.
+
+> **Penting:** skrip skema membuat tabel hanya jika belum ada; menjalankannya pada database lama tidak otomatis mengubah struktur tabel yang sudah ada. Untuk database yang telah berisi data, siapkan dan uji skrip migrasi `ALTER` terlebih dahulu. Jangan menghapus database berisi data tanpa cadangan.
 
 Backend juga memerlukan `GOOGLE_RECAPTCHA_SECRET` di file `.env` untuk mengaktifkan registrasi. Gunakan secret Google reCAPTCHA milik aplikasi; jangan commit file `.env`.
