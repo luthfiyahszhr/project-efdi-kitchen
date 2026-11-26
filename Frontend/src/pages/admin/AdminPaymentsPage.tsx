@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banknote,
   CheckCircle2,
@@ -28,6 +28,7 @@ export const AdminPaymentsPage: React.FC = () => {
     getRemainingBalance,
     verifyPayment,
     recordCashPayment,
+    fetchPaymentProof,
   } = useApp();
 
   const [tab, setTab] = useState<'Menunggu Verifikasi' | 'Semua'>(
@@ -35,6 +36,8 @@ export const AdminPaymentsPage: React.FC = () => {
   );
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [zoomOpen, setZoomOpen] = useState(false);
+  const [proofUrls, setProofUrls] = useState<Record<number, string>>({});
+  const [proofErrors, setProofErrors] = useState<Record<number, string>>({});
 
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -73,15 +76,42 @@ export const AdminPaymentsPage: React.FC = () => {
   const selectedOrder = selectedPayment
     ? orders.find((o) => o.id === selectedPayment.pesananId)
     : undefined;
+  const selectedProofUrl = selectedPayment
+    ? proofUrls[selectedPayment.id]
+    : undefined;
+  const selectedProofError = selectedPayment
+    ? proofErrors[selectedPayment.id]
+    : undefined;
+
+  useEffect(() => {
+    if (!selectedPayment?.buktiTersedia || proofUrls[selectedPayment.id]) return;
+    let active = true;
+    void fetchPaymentProof(selectedPayment.id)
+      .then((url) => {
+        if (active) setProofUrls((current) => ({ ...current, [selectedPayment.id]: url }));
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setProofErrors((current) => ({
+            ...current,
+            [selectedPayment.id]: error instanceof Error ? error.message : 'Bukti tidak dapat dimuat.',
+          }));
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchPaymentProof, proofUrls, selectedPayment]);
 
   const selectedCashOrder = walkInOrders.find((o) => o.id === Number(cashOrderId));
 
-  const handleApprove = () => {
+  const handleApprove = async () => {
     if (!selectedPayment) return;
-    verifyPayment({ paymentId: selectedPayment.id, approved: true });
+    const result = await verifyPayment({ paymentId: selectedPayment.id, approved: true });
+    if (!result.ok) setRejectError(result.error || 'Gagal menerima pembayaran.');
   };
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!selectedPayment) return;
     const trimmed = rejectReason.trim();
     if (!trimmed) {
@@ -92,7 +122,7 @@ export const AdminPaymentsPage: React.FC = () => {
       setRejectError('Alasan penolakan maksimal 255 karakter.');
       return;
     }
-    const res = verifyPayment({
+    const res = await verifyPayment({
       paymentId: selectedPayment.id,
       approved: false,
       alasanPenolakan: trimmed,
@@ -106,7 +136,7 @@ export const AdminPaymentsPage: React.FC = () => {
     setRejectError('');
   };
 
-  const handleCashSubmit = (e: React.FormEvent) => {
+  const handleCashSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCashError('');
     if (!selectedCashOrder) {
@@ -114,7 +144,7 @@ export const AdminPaymentsPage: React.FC = () => {
       return;
     }
     const nominal = Number(cashNominal);
-    const res = recordCashPayment({
+    const res = await recordCashPayment({
       orderId: selectedCashOrder.id,
       jenis: cashJenis,
       nominal,
@@ -262,10 +292,10 @@ export const AdminPaymentsPage: React.FC = () => {
                   <PaymentRecordBadge status={selectedPayment.status} />
                 </div>
 
-                {selectedPayment.buktiUrl ? (
+                {selectedProofUrl ? (
                   <div className="relative overflow-hidden rounded-xl border border-[#DCE5DA] bg-[#F5F7F4]">
                     <img
-                      src={selectedPayment.buktiUrl}
+                      src={selectedProofUrl}
                       alt={`Bukti pembayaran ${selectedPayment.kodePesanan}`}
                       className="mx-auto max-h-60 w-full object-contain"
                     />
@@ -277,6 +307,10 @@ export const AdminPaymentsPage: React.FC = () => {
                       <ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
                       Perbesar Bukti
                     </button>
+                  </div>
+                ) : selectedPayment.buktiTersedia ? (
+                  <div className="rounded-xl bg-[#F5F7F4] p-4 text-xs text-[#55645A]">
+                    {selectedProofError || 'Memuat bukti pembayaran...'}
                   </div>
                 ) : (
                   <div className="rounded-xl bg-[#F5F7F4] p-4 text-xs text-[#55645A]">
@@ -425,14 +459,14 @@ export const AdminPaymentsPage: React.FC = () => {
 
       {/* Zoom Proof Modal */}
       <Modal
-        open={zoomOpen && Boolean(selectedPayment?.buktiUrl)}
+        open={zoomOpen && Boolean(selectedProofUrl)}
         onClose={() => setZoomOpen(false)}
         title={`Bukti Pembayaran ${selectedPayment?.kodePesanan ?? ''}`}
         maxWidthClass="max-w-2xl"
       >
-        {selectedPayment?.buktiUrl && (
+        {selectedProofUrl && (
           <img
-            src={selectedPayment.buktiUrl}
+            src={selectedProofUrl}
             alt="Bukti pembayaran diperbesar"
             className="mx-auto max-h-[75vh] w-full rounded-xl bg-[#F5F7F4] object-contain"
           />

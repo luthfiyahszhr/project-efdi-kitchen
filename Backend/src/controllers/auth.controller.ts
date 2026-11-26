@@ -216,3 +216,28 @@ export const logout: RequestHandler = async (req, res, next) => {
     next(error);
   }
 };
+
+export const me: RequestHandler = async (req, res, next) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('id', sql.Int, req.user!.id)
+      .query(`
+        SELECT id_pengguna, nama_lengkap, username, email, role, aktif
+        FROM dbo.pengguna
+        WHERE id_pengguna = @id AND aktif = 1
+      `);
+    const user = result.recordset[0];
+    if (!user) throw new AppError('ERR-AUTH-04', 401);
+    return ok(res, {
+      id_pengguna: user.id_pengguna,
+      nama_lengkap: user.nama_lengkap,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      aktif: user.aktif,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

@@ -18,7 +18,6 @@ import {
 import { EmptyState } from '../../components/ui/Feedback';
 import { Button } from '../../components/ui/FormControls';
 import { NotaModal } from '../../components/ui/NotaDocument';
-import { triggerDownloadNotaHtml } from '../../utils/notaDownload';
 import { useApp } from '../../context/AppContext';
 import {
   formatRupiah,
@@ -34,6 +33,7 @@ export const OrderSummaryPage: React.FC = () => {
     getVerifiedPaidAmount,
     getRemainingBalance,
     getOrderPayments,
+    downloadNota,
     pushToast,
   } = useApp();
 
@@ -332,7 +332,7 @@ export const OrderSummaryPage: React.FC = () => {
             )}
           <Button
             variant="secondary"
-            onClick={() => triggerDownloadNotaHtml(order, paidAmount)}
+            onClick={() => void downloadNota(order)}
           >
             <Download className="h-4 w-4" aria-hidden="true" />
             Unduh Nota

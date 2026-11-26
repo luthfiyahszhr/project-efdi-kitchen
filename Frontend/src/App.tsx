@@ -32,8 +32,16 @@ const RequireAuth: React.FC<{
   allowedRoles?: Role[];
   children: React.ReactNode;
 }> = ({ allowedRoles, children }) => {
-  const { currentUser } = useApp();
+  const { authReady, currentUser } = useApp();
   const location = useLocation();
+
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-[#55645A]">
+        Menghubungkan ke Efdi Kitchen...
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (

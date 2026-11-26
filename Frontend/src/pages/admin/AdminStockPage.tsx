@@ -58,7 +58,7 @@ export const AdminStockPage: React.FC = () => {
     return true;
   };
 
-  const handleMutasiSubmit = (e: React.FormEvent) => {
+  const handleMutasiSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -83,7 +83,7 @@ export const AdminStockPage: React.FC = () => {
       }
     }
 
-    const res = mutateInventory({
+    const res = await mutateInventory({
       itemId: selectedItem.id,
       jenisMutasi,
       jumlah: Number(jumlahStr),
@@ -100,7 +100,7 @@ export const AdminStockPage: React.FC = () => {
     setKeterangan('');
   };
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -117,7 +117,7 @@ export const AdminStockPage: React.FC = () => {
       return;
     }
 
-    const res = createInventoryItem({
+    const res = await createInventoryItem({
       nama: newNama,
       tipe: newTipe,
       satuan: newSatuan,

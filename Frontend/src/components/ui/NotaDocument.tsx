@@ -6,7 +6,7 @@ import {
   formatTanggalIndonesia,
   formatWaktuWib,
 } from '../../utils/format';
-import { triggerDownloadNotaHtml } from '../../utils/notaDownload';
+import { useApp } from '../../context/AppContext';
 import { Button } from './FormControls';
 import { Modal } from './Feedback';
 
@@ -16,6 +16,7 @@ export const NotaModal: React.FC<{
   order: Order | null;
   paidAmount: number;
 }> = ({ open, onClose, order, paidAmount }) => {
+  const { downloadNota } = useApp();
   if (!order) return null;
   const remaining = Math.max(0, order.totalHarga - paidAmount);
 
@@ -129,10 +130,10 @@ export const NotaModal: React.FC<{
         </Button>
         <Button
           variant="primary"
-          onClick={() => triggerDownloadNotaHtml(order, paidAmount)}
+          onClick={() => void downloadNota(order)}
         >
           <Download className="h-4 w-4" aria-hidden="true" />
-          Unduh Nota (.html)
+          Unduh Nota (.pdf)
         </Button>
       </div>
     </Modal>

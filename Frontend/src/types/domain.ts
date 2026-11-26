@@ -52,7 +52,7 @@ export interface UserAccount {
   namaLengkap: string;
   username?: string;
   email: string;
-  password: string; // Simulasi prototipe saja
+  password?: string;
   role: Role;
   aktif: boolean;
   mustChangePassword?: boolean;
@@ -133,6 +133,7 @@ export interface PaymentRecord {
   metode: PaymentMethod;
   nominal: number;
   buktiUrl?: string;
+  buktiTersedia?: boolean;
   buktiNamaFile?: string;
   waktuUnggah: string; // ISO string
   status: PaymentRecordStatus;

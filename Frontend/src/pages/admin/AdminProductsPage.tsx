@@ -21,7 +21,7 @@ import type { JenisPaket, Product, ProductComposition } from '../../types/domain
 import { formatRupiah, formatStockNumber } from '../../utils/format';
 
 export const AdminProductsPage: React.FC = () => {
-  const { products, inventory, saveProduct, toggleProductActive } = useApp();
+  const { products, inventory, saveProduct, toggleProductActive, pushToast } = useApp();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | undefined>(undefined);
@@ -87,7 +87,7 @@ export const AdminProductsPage: React.FC = () => {
     setKomposisi((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -103,7 +103,7 @@ export const AdminProductsPage: React.FC = () => {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const res = saveProduct({
+    const res = await saveProduct({
       id: editingId,
       nama,
       jenis,
@@ -211,7 +211,16 @@ export const AdminProductsPage: React.FC = () => {
                       <Button
                         variant={p.aktif ? 'ghost' : 'secondary'}
                         size="sm"
-                        onClick={() => toggleProductActive(p.id)}
+                        onClick={async () => {
+                          const result = await toggleProductActive(p.id);
+                          if (!result.ok) {
+                            pushToast({
+                              type: 'error',
+                              title: 'Status produk gagal diubah',
+                              message: result.error,
+                            });
+                          }
+                        }}
                       >
                         <Power className="h-3.5 w-3.5" aria-hidden="true" />
                         {p.aktif ? 'Nonaktifkan' : 'Aktifkan'}
