@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import PDFDocument from 'pdfkit';
 import type { Request, RequestHandler } from 'express';
-import { dayjs } from '../utils/datetime';
+import { dayjs, toWIB } from '../utils/datetime';
 import { getPool, sql } from '../config/database';
 import { env } from '../config/env';
 import { AppError } from '../utils/errors';
@@ -47,7 +47,7 @@ export const catalogSearch = endpoint(async (req) => {
   const result = await query.query(`
     SELECT id_produk, nama_paket, jenis_paket, deskripsi, isi_paket, harga_per_porsi,
            CASE WHEN foto_path IS NULL THEN NULL ELSE CONCAT('/media/produk/', id_produk) END AS foto_url
-    FROM dbo.Produk
+    FROM dbo.produk
     WHERE ${conditions.join(' AND ')}
     ORDER BY nama_paket
   `);
@@ -74,7 +74,7 @@ export const catalogDetail = endpoint(async (req) => {
       SELECT id_produk, nama_paket, jenis_paket, deskripsi, isi_paket, harga_per_porsi,
              CASE WHEN foto_path IS NULL THEN NULL ELSE CONCAT('/media/produk/', id_produk) END AS foto_url,
              aktif
-      FROM dbo.Produk
+      FROM dbo.produk
       WHERE id_produk = @id AND aktif = 1
     `);
   if (!result.recordset[0]) throw new AppError('ERR-CAT-04', 409, 'Paket tidak tersedia, pilih paket lain');
@@ -102,7 +102,7 @@ export const uploadPayment = endpoint(async (req) => {
   const pool = await getPool();
   const orderResult = await pool.request()
     .input('id', sql.Int, Number(req.params.id_pesanan))
-    .query(`SELECT kode_pesanan FROM dbo.Pesanan WHERE id_pesanan = @id`);
+    .query(`SELECT kode_pesanan FROM dbo.pesanan WHERE id_pesanan = @id`);
   const kode = orderResult.recordset[0]?.kode_pesanan;
   if (!kode) throw new AppError('ERR-ORD-01', 404);
 
@@ -128,8 +128,8 @@ async function findOrder(req: Request) {
   let where: string;
   if (isCustomer) {
     const { kode_pesanan, no_kontak } = req.body;
-    request.input('kode', sql.VarChar(20), kode_pesanan);
-    request.input('kontak', sql.VarChar(16), no_kontak);
+    request.input('kode', sql.NVarChar(10), kode_pesanan);
+    request.input('kontak', sql.NVarChar(20), no_kontak);
     request.input('userId', sql.Int, user.id);
     where = 'p.kode_pesanan = @kode AND p.no_kontak = @kontak AND p.id_pelanggan = @userId';
   } else {
@@ -140,8 +140,8 @@ async function findOrder(req: Request) {
     SELECT p.id_pesanan, p.kode_pesanan, p.nama_pelanggan, p.no_kontak, p.id_pelanggan,
            p.tanggal_acara, p.waktu_acara, p.status_pesanan, p.status_pembayaran, p.total_harga,
            n.nomor_nota, n.total_tagihan, n.nominal_dp, n.sisa_pembayaran
-    FROM dbo.Pesanan p
-    LEFT JOIN dbo.NotaDigital n ON n.id_pesanan = p.id_pesanan
+    FROM dbo.pesanan p
+    LEFT JOIN dbo.nota_digital n ON n.id_pesanan = p.id_pesanan
     WHERE ${where}
   `);
   const order = result.recordset[0];
@@ -153,13 +153,13 @@ async function orderStatusData(req: Request) {
   const { pool, order } = await findOrder(req);
   const [history, balance] = await Promise.all([
     pool.request().input('id', sql.Int, order.id_pesanan).query(`
-      SELECT status, waktu FROM dbo.RiwayatStatusPesanan
+      SELECT status, waktu FROM dbo.riwayat_status_pesanan
       WHERE id_pesanan = @id ORDER BY waktu, id_riwayat
     `),
     pool.request().input('id', sql.Int, order.id_pesanan).query(`
       SELECT o.total_harga - ISNULL(SUM(CASE WHEN p.status = 'DITERIMA' THEN p.nominal ELSE 0 END), 0) AS sisa
-      FROM dbo.Pesanan o
-      LEFT JOIN dbo.Pembayaran p ON p.id_pesanan = o.id_pesanan
+      FROM dbo.pesanan o
+      LEFT JOIN dbo.pembayaran p ON p.id_pesanan = o.id_pesanan
       WHERE o.id_pesanan = @id
       GROUP BY o.total_harga
     `),
@@ -171,7 +171,7 @@ async function orderStatusData(req: Request) {
     sisa_pembayaran: Number(balance.recordset[0]?.sisa ?? order.total_harga).toFixed(2),
     riwayat_status: history.recordset.map((entry) => ({
       ...entry,
-      waktu: dayjs.utc(entry.waktu).utcOffset(420, true).format(),
+      waktu: toWIB(entry.waktu),
     })),
   };
 }
@@ -184,7 +184,7 @@ async function createNotaPdf(req: Request): Promise<{ nomor_nota: string; filena
     .input('id', sql.Int, order.id_pesanan)
     .query(`
       SELECT nomor_nota, total_tagihan, nominal_dp, sisa_pembayaran
-      FROM dbo.NotaDigital WHERE id_pesanan = @id
+      FROM dbo.nota_digital WHERE id_pesanan = @id
     `);
   const note = nota.recordset[0];
   if (!note) throw new AppError('ERR-SYS-02', 500, 'Nota digital belum tersedia');
@@ -192,8 +192,8 @@ async function createNotaPdf(req: Request): Promise<{ nomor_nota: string; filena
     .input('id', sql.Int, order.id_pesanan)
     .query(`
       SELECT pr.nama_paket, dp.jumlah_porsi, dp.harga_satuan, dp.subtotal
-      FROM dbo.DetailPesanan dp
-      JOIN dbo.Produk pr ON pr.id_produk = dp.id_produk
+      FROM dbo.detail_pesanan dp
+      JOIN dbo.produk pr ON pr.id_produk = dp.id_produk
       WHERE dp.id_pesanan = @id
     `);
 
@@ -209,7 +209,8 @@ async function createNotaPdf(req: Request): Promise<{ nomor_nota: string; filena
   document.fontSize(10)
     .text(`Kode pesanan: ${order.kode_pesanan}`)
     .text(`Nama pelanggan: ${order.nama_pelanggan}`)
-    .text(`Tanggal acara: ${String(order.tanggal_acara).slice(0, 10)} ${order.waktu_acara}`);
+    .text(`Tanggal acara: ${dayjs.utc(order.tanggal_acara).format('YYYY-MM-DD')} ${dayjs.utc(order.waktu_acara).format('HH:mm')}`)
+    .text(`Status pembayaran: ${order.status_pembayaran}`);
   document.moveDown().text('Rincian pesanan:');
   for (const row of detail.recordset) {
     document.text(`${row.nama_paket} - ${row.jumlah_porsi} porsi x Rp${row.harga_satuan} = Rp${row.subtotal}`);
@@ -234,7 +235,7 @@ export const cancelOrder = endpoint(async (req) => {
   const pool = await getPool();
   const result = await pool.request()
     .input('id', sql.Int, Number(req.params.id_pesanan))
-    .query(`SELECT kode_pesanan FROM dbo.Pesanan WHERE id_pesanan = @id`);
+    .query(`SELECT kode_pesanan FROM dbo.pesanan WHERE id_pesanan = @id`);
   const kode = result.recordset[0]?.kode_pesanan;
   if (!kode) throw new AppError('ERR-ORD-01', 404);
   return cancellationService.cancel({
@@ -252,7 +253,7 @@ export const serveProductImage: RequestHandler = async (req, res, next) => {
     const pool = await getPool();
     const result = await pool.request()
       .input('id', sql.Int, id)
-      .query(`SELECT foto_path FROM dbo.Produk WHERE id_produk = @id AND aktif = 1`);
+      .query(`SELECT foto_path FROM dbo.produk WHERE id_produk = @id AND aktif = 1`);
     const storedName = result.recordset[0]?.foto_path;
     if (typeof storedName !== 'string' || !storedName) throw new AppError('ERR-CAT-04', 404);
     const filename = path.basename(storedName);

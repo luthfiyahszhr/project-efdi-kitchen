@@ -27,7 +27,7 @@ export const list: RequestHandler = async (req, res, next) => {
       cond.push('harga_per_porsi <= @hmax');
     }
 
-    const r = await request.query(`SELECT * FROM dbo.Produk WHERE ${cond.join(' AND ')} ORDER BY id_produk DESC`);
+    const r = await request.query(`SELECT * FROM dbo.produk WHERE ${cond.join(' AND ')} ORDER BY id_produk DESC`);
     return ok(res, r.recordset);
   } catch (e) { next(e); }
 };
@@ -37,7 +37,7 @@ export const detail: RequestHandler = async (req, res, next) => {
     const pool = await getPool();
     const r = await pool.request()
       .input('id', sql.Int, Number(req.params.id))
-      .query(`SELECT * FROM dbo.Produk WHERE id_produk = @id AND aktif = 1`);
+      .query(`SELECT * FROM dbo.produk WHERE id_produk = @id AND aktif = 1`);
     if (!r.recordset[0]) throw new AppError('ERR-CAT-04', 404);
     return ok(res, r.recordset[0]);
   } catch (e) { next(e); }

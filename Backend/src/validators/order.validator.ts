@@ -10,7 +10,7 @@ export const createOrder = [
   body('no_kontak').matches(KONTAK_REGEX).withMessage('Nomor kontak harus diawali 08 atau +62 (10-15 digit)'),
   body('detail').isArray({ min: 1 }).withMessage('Detail pesanan minimal 1 item'),
   body('detail.*.id_produk').isInt({ min: 1 }).withMessage('id_produk tidak valid').toInt(),
-  body('detail.*.jumlah_porsi').isInt({ min: 1 }).withMessage('jumlah_porsi minimal 1').toInt(),
+  body('detail.*.jumlah_porsi').isInt({ min: 1, max: 2147483647 }).withMessage('jumlah_porsi harus berada dalam rentang INT positif').toInt(),
   body('tanggal_acara').isDate({ format: 'YYYY-MM-DD', strictMode: true }).withMessage('tanggal_acara harus berformat YYYY-MM-DD'),
   body('waktu_acara')
     .matches(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/)

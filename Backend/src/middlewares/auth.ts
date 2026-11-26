@@ -10,7 +10,7 @@ async function getSessionUser(userId: number | null | undefined): Promise<AuthUs
     .input('id', sql.Int, userId)
     .query(`
       SELECT id_pengguna, role, email
-      FROM dbo.Pengguna
+      FROM dbo.pengguna
       WHERE id_pengguna = @id AND aktif = 1
     `);
   const user = result.recordset[0];

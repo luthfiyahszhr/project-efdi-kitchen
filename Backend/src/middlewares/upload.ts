@@ -1,6 +1,7 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { randomBytes } from 'crypto';
 import { env } from '../config/env';
 import { AppError } from '../utils/errors';
 
@@ -10,12 +11,14 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, env.upload.dir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `bukti_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+    cb(null, `bukti_${Date.now()}_${randomBytes(16).toString('hex')}${ext}`);
   },
 });
 
 const imageFileFilter: multer.Options['fileFilter'] = (req, file, cb) => {
-  const ok = ['image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype);
+  const ext = path.extname(file.originalname).toLowerCase();
+  const ok = (['.jpg', '.jpeg'].includes(ext) && ['image/jpeg', 'image/jpg'].includes(file.mimetype)) ||
+    (ext === '.png' && file.mimetype === 'image/png');
   if (!ok) return cb(new AppError('ERR-VAL-05', 422, 'File harus JPG/JPEG/PNG'));
   cb(null, true);
 };

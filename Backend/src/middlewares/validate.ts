@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import path from 'path';
 import type { RequestHandler } from 'express';
 import { validationResult } from 'express-validator';
 import type { ZodType } from 'zod';
@@ -73,14 +74,23 @@ export const validateUploadedImage: RequestHandler = async (req, res, next) => {
 
     const isJpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
     const isPng = header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const ext = path.extname(file.originalname).toLowerCase();
     const matchesMime = (isJpeg && ['image/jpeg', 'image/jpg'].includes(file.mimetype)) ||
       (isPng && file.mimetype === 'image/png');
-    if (!matchesMime) {
+    const matchesExtension = (isJpeg && ['.jpg', '.jpeg'].includes(ext)) || (isPng && ext === '.png');
+    if (!matchesMime || !matchesExtension) {
       await fs.unlink(file.path);
       return next(new AppError('ERR-VAL-05', 422, 'Unggah gambar JPG/PNG dengan ukuran sesuai batas'));
     }
     next();
   } catch (error) {
+    try {
+      await fs.unlink(file.path);
+    } catch (cleanupError) {
+      if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('[UPLOAD] Gagal menghapus file yang gagal divalidasi:', cleanupError);
+      }
+    }
     next(error);
   }
 };

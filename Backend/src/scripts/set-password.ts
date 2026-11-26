@@ -12,18 +12,18 @@ async function main() {
     console.error('Pemakaian: npx tsx src/scripts/set-password.ts <email> <password-baru>');
     process.exit(1);
   }
-  if (password.length < 6) {
-    console.error('Password minimal 6 karakter.');
+  if (password.length < 8) {
+    console.error('Password minimal 8 karakter.');
     process.exit(1);
   }
 
   const hash = await bcrypt.hash(password, 10);
   const pool = await getPool();
   const r = await pool.request()
-    .input('email', sql.NVarChar(150), email)
+    .input('email', sql.NVarChar(100), email)
     .input('hash', sql.NVarChar(255), hash)
     .query(`
-      UPDATE dbo.Pengguna
+      UPDATE dbo.pengguna
       SET password_hash = @hash, jumlah_gagal = 0, terkunci_sampai = NULL
       WHERE email = @email
     `);
